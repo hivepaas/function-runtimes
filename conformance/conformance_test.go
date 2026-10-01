@@ -29,6 +29,7 @@ type runtimeDef struct {
 
 var runtimes = []runtimeDef{
 	{name: "go127", compiled: true},
+	{name: "node24"},
 }
 
 func TestConformance(t *testing.T) {
