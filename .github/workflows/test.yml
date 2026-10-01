@@ -1,0 +1,89 @@
+name: 'Test'
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Lint
+        run: docker run --rm -v "$PWD:/src" -w /src golangci/golangci-lint:v2.13.0 golangci-lint run --build-tags conformance ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Shell scripts
+        run: shellcheck runtimes/go127/hivepaas-runtime runtimes/python313/hivepaas-runtime
+
+  node:
+    name: Node.js runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test
+        run: docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/node24/test/*.test.mjs'
+
+  python:
+    name: Python runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test
+        run: >-
+          docker run --rm -v "$PWD:/src:ro" -w /src
+          -e PYTHONPATH=/src/runtimes/python313/runtime -e PYTHONDONTWRITEBYTECODE=1
+          python:3.13-slim-trixie python -m unittest discover -s runtimes/python313/tests
+
+  # Every image, built and called the way HivePaaS will, on both architectures
+  # it is published for.
+  conformance:
+    name: Conformance (${{ matrix.runtime }}, ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [go127, node24, python313]
+        arch: [amd64, arm64]
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Conformance
+        env:
+          RUNTIMES: ${{ matrix.runtime }}
+        run: go test -tags conformance -count=1 -v ./conformance/

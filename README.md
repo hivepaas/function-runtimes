@@ -39,6 +39,24 @@ go test -tags conformance ./conformance/         # every runtime image, with doc
 RUNTIMES=node24 go test -tags conformance ./conformance/
 ```
 
+The Node.js and Python runtimes have unit tests of their own, run in their base
+images:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/node24/test/*.test.mjs'
+docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/src/runtimes/python313/runtime \
+  python:3.13-slim-trixie python -m unittest discover -s runtimes/python313/tests
+```
+
+## Releasing
+
+A tag `vX.Y.Z` on `main` builds every image for amd64 and arm64, pushes
+`function-runtime-<runtime>:X.Y.Z` (and `:X` for a release that is not a
+prerelease) to GHCR, and drafts a GitHub Release listing each image by digest.
+Those lines go into HivePaaS's `release.json`, under `functionRuntimes`. The
+tag's major is the contract's: a change that breaks the contract is a new major,
+with its own section in [CONTRACT.md](CONTRACT.md).
+
 ## License
 
 Apache License 2.0.
