@@ -500,6 +500,42 @@ func TestAHandlersLogLineCarriesTheCallsID(t *testing.T) {
 	}
 }
 
+// A connection that has sent no request is not a call: stopping does not wait
+// for it (net/http's Shutdown would, up to 5 seconds, then fail at the timeout).
+func TestStoppingDoesNotWaitForAConnectionThatSentNothing(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig
+	cfg.Timeout = 2 * time.Second
+	rt, _, _ := newTestRuntime(noContent, cfg)
+	ctx, stop := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- rt.Serve(ctx, listener) }()
+	idle, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idle.Close()
+	time.Sleep(50 * time.Millisecond) // accepted
+
+	start := time.Now()
+	stop()
+
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("serve returned %v", err)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Fatalf("stopping took %v", took)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("serve did not return")
+	}
+}
+
 // Stopping waits for the calls that are running, then returns.
 func TestStoppingLetsRunningCallsFinish(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -37,6 +37,7 @@ const (
 	// (Traefik: 90s), so that the proxy, not the function, closes it.
 	idleTimeout       = 5 * time.Minute
 	readHeaderTimeout = 10 * time.Second
+	stopPollInterval  = 10 * time.Millisecond
 	requestIDBytes    = 16
 )
 
@@ -71,10 +72,12 @@ func New(h hivepaas.HandlerFunc, cfg Config, out, errOut io.Writer) *Runtime {
 // Serve answers on l until ctx ends, then waits for the running calls, at
 // most for one timeout, and returns.
 func (rt *Runtime) Serve(ctx context.Context, l net.Listener) error {
+	fresh := &freshConns{conns: map[net.Conn]struct{}{}}
 	server := &http.Server{
 		Handler:           rt,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		ConnState:         fresh.track,
 	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(l) }()
@@ -85,13 +88,51 @@ func (rt *Runtime) Serve(ctx context.Context, l net.Listener) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rt.cfg.Timeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("stopping: %w", err)
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Shutdown(shutdownCtx) }()
+	// A connection that has sent no request is not a call: it is closed, not
+	// waited for, as Shutdown would for up to 5 seconds.
+	ticker := time.NewTicker(stopPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-stopped:
+			if err != nil {
+				return fmt.Errorf("stopping: %w", err)
+			}
+			if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		case <-ticker.C:
+			fresh.closeAll()
+		}
 	}
-	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
-		return err
+}
+
+// freshConns are the server's connections that have not sent a request yet.
+type freshConns struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func (f *freshConns) track(c net.Conn, state http.ConnState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if state == http.StateNew {
+		f.conns[c] = struct{}{}
+	} else {
+		delete(f.conns, c)
 	}
-	return nil
+}
+
+func (f *freshConns) closeAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for c := range f.conns {
+		_ = c.Close()
+		delete(f.conns, c)
+	}
 }
 
 // ServeHTTP answers one request.
