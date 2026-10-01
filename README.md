@@ -1,2 +1,44 @@
 # function-runtimes
-Runtimes for FaaS
+
+The runtimes HivePaaS runs functions with: one per language, each an image that
+turns a handler into a server.
+
+| Runtime | Language | Image |
+|---|---|---|
+| `node24` | Node.js 24 | `ghcr.io/hivepaas/function-runtime-node24` |
+| `python313` | Python 3.13 | `ghcr.io/hivepaas/function-runtime-python313` |
+| `go127` | Go 1.27 | `ghcr.io/hivepaas/function-runtime-go127`, compiled in `function-runtime-go127-build` |
+
+What a handler can count on, and what the images promise, is the contract:
+[CONTRACT.md](CONTRACT.md). An image's major version is the contract's version.
+
+## Layout
+
+- `hivepaas/`: the Go package a Go handler is written against, and
+  `hivepaas/serve`, the Go runtime itself.
+- `runtimes/<runtime>/`: each runtime's Dockerfile and code.
+- `conformance/`: the suite every image passes, in `serve` and in `invoke`, with
+  a fixture function per runtime in `conformance/fixtures/<runtime>/`.
+
+## Trying a runtime
+
+```bash
+docker build -t fn-node24 -f runtimes/node24/Dockerfile .
+mkdir -p /tmp/fn && cat > /tmp/fn/index.js <<'JS'
+module.exports = async (req) => ({ body: { hello: req.query.name ?? "world" } })
+JS
+docker run --rm -p 8080:8080 -v /tmp/fn:/app fn-node24
+curl 'localhost:8080/?name=Ada'
+```
+
+## Tests
+
+```bash
+go test ./...                                    # the Go packages
+go test -tags conformance ./conformance/         # every runtime image, with docker
+RUNTIMES=node24 go test -tags conformance ./conformance/
+```
+
+## License
+
+Apache License 2.0.

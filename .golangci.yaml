@@ -1,0 +1,75 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - dogsled
+    - err113
+    - errname
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - lll
+    - makezero
+    - misspell
+    - mnd
+    - nakedret
+    - nilerr
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - whitespace
+    - wrapcheck
+  settings:
+    funlen:
+      lines: 120
+      statements: 100
+    gocognit:
+      min-complexity: 30
+    gocyclo:
+      min-complexity: 30
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - contextcheck
+          - err113
+          - errorlint
+          - forcetypeassert
+          - funlen
+          - gocognit
+          - goconst
+          - gocyclo
+          - gosec
+          - mnd
+          - revive
+          - wrapcheck
+        path: _test\.go
+formatters:
+  enable:
+    - gci
+    - gofmt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/hivepaas/function-runtimes)
