@@ -1,2 +1,6 @@
 # Built by a function, never committed
 .hivepaas/
+# Left by running the runtimes' tests and fixtures by hand
+__pycache__/
+node_modules/
+*.whl

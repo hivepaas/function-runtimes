@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -233,6 +234,21 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 		c.call(t, http.MethodGet, "/log", nil, map[string]string{"X-Request-Id": "conf-log"})
 		if line := c.jsonLine(t, "log", "conf-log"); line["msg"] != "fixture log line" {
 			t.Errorf("log line %v", line)
+		}
+	})
+
+	// A warm call takes about a millisecond here; a server that waits for the
+	// client's delayed ACK before the body takes some 40.
+	t.Run("a warm call is answered without delay", func(t *testing.T) {
+		took := make([]time.Duration, 21)
+		for i := range took {
+			start := time.Now()
+			c.get(t, "/text")
+			took[i] = time.Since(start)
+		}
+		slices.Sort(took)
+		if median := took[len(took)/2]; median > 20*time.Millisecond {
+			t.Errorf("the median call took %v", median)
 		}
 	})
 

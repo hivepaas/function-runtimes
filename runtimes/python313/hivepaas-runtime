@@ -1,0 +1,3 @@
+#!/bin/sh
+# hivepaas-runtime for Python, run by the function's virtual environment.
+exec python -m hivepaas_runtime "$@"
