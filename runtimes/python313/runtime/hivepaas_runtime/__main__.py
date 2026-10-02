@@ -6,8 +6,8 @@ import sys
 import urllib.error
 import urllib.request
 
+from . import processes
 from .runtime import APP_DIR, ConfigError, Runtime, load_config
-from .server import serve
 
 USAGE = "usage: hivepaas-runtime serve|invoke|health|deps"
 HEALTH_TIMEOUT_S = 3
@@ -27,13 +27,18 @@ def main(argv: list[str]) -> int:
         return 2
     if command == "health":
         return health(cfg.port)
-    runtime = Runtime.load(cfg)
     if command == "invoke":
-        code = runtime.invoke(sys.stdin.buffer.read())
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(code)  # at once: a handler still running past its timeout is done with
-    return serve(runtime)
+        code = Runtime.load(cfg).invoke(sys.stdin.buffer.read())
+    else:
+        try:
+            count = processes.process_count(os.environ, cfg)
+        except ConfigError as error:
+            print(f"hivepaas: {error}", file=sys.stderr)
+            return 2
+        code = processes.serve(cfg, count)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)  # at once: a handler still running past its timeout is done with
 
 
 def health(port: int) -> int:

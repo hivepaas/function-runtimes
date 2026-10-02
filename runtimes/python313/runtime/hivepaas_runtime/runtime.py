@@ -72,6 +72,11 @@ def _positive(env: Mapping[str, str], name: str, fallback: int) -> int:
     value = env.get(name)
     if not value:
         return fallback
+    return positive_whole_number(name, value)
+
+
+def positive_whole_number(name: str, value: str) -> int:
+    """value as a positive whole number; a ConfigError naming name when it is not one."""
     if not _WHOLE_NUMBER.fullmatch(value) or not 0 < int(value) <= _MAX_LIMIT:
         raise ConfigError(f'{name} is "{value}", which is not a positive whole number')
     return int(value)
@@ -248,40 +253,72 @@ def _printer(stream_name: str) -> Callable[[str], None]:
     return write
 
 
-class Runtime:
-    """Runs one handler under the configured limits."""
+class LocalPlaces:
+    """The running calls of one process."""
 
-    def __init__(self, handler, cfg: Config, out=None, err=None):
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._count = 0
+
+    def take(self, limit: int) -> bool:
+        with self._lock:
+            if self._count >= limit:
+                return False
+            self._count += 1
+            return True
+
+    def give(self) -> None:
+        with self._lock:
+            self._count -= 1
+
+
+class Runtime:
+    """Runs one handler under the configured limits. places counts the running
+    calls: this process's, or, given, every worker's of an instance."""
+
+    def __init__(self, handler, cfg: Config, out=None, err=None, places=None):
         self.handler = handler  # None when it could not be loaded
         self.cfg = cfg
-        self.running = 0  # calls whose handler has not returned
-        self.answering = 0  # HTTP requests being answered
         self.stopping = False
         self.closed = False
-        self._lock = threading.Lock()
+        self._places = places or LocalPlaces()
         self._write = out or _printer("stdout")
         self._error = err or _printer("stderr")
-        self._pool = concurrent.futures.ThreadPoolExecutor(cfg.max_concurrency, thread_name_prefix="hivepaas-call")
-        self._loop = None
-        if handler is not None and _is_async(handler):
-            # Coroutines share one event loop, as in any asyncio server.
-            self._loop = asyncio.new_event_loop()
-            threading.Thread(target=self._loop.run_forever, daemon=True, name="hivepaas-loop").start()
+        self._is_async = handler is not None and _is_async(handler)
+        self._lock = threading.Lock()
+        self._pool = None  # made at the first call of a function
+        self._loop = None  # made at the first call of a coroutine by call, which invoke uses
 
     @classmethod
-    def load(cls, cfg: Config, out=None, err=None) -> "Runtime":
+    def load(cls, cfg: Config, out=None, err=None, places=None) -> "Runtime":
         """A runtime for the function in /app. A handler that cannot be loaded is logged."""
         try:
             handler = load_handler(APP_DIR, cfg)
         except (Exception, SystemExit) as error:
             (err or _printer("stderr"))(f"hivepaas: the handler could not be loaded: {_describe(error)}")
             handler = None
-        return cls(handler, cfg, out, err)
+        return cls(handler, cfg, out, err, places)
 
     def close(self) -> None:
-        self._pool.shutdown(wait=False, cancel_futures=True)
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
+
+    def _executor(self) -> concurrent.futures.ThreadPoolExecutor:
+        with self._lock:
+            if self._pool is None:
+                self._pool = concurrent.futures.ThreadPoolExecutor(self.cfg.max_concurrency,
+                                                                   thread_name_prefix="hivepaas-call")
+            return self._pool
+
+    def _own_loop(self) -> asyncio.AbstractEventLoop:
+        """The loop call runs coroutines on, in a thread of its own."""
+        with self._lock:
+            if self._loop is None:
+                self._loop = asyncio.new_event_loop()
+                threading.Thread(target=self._loop.run_forever, daemon=True, name="hivepaas-loop").start()
+            return self._loop
 
     def out(self, line: str) -> None:
         if not self.closed:
@@ -296,36 +333,26 @@ class Runtime:
 
     def try_reserve(self) -> bool:
         """Takes a place among the running calls, when there is one."""
-        with self._lock:
-            if self.running >= self.cfg.max_concurrency:
-                return False
-            self.running += 1
-            return True
+        return self._places.take(self.cfg.max_concurrency)
 
     def _release(self) -> None:
-        with self._lock:
-            self.running -= 1
+        self._places.give()
 
-    def begin_answer(self) -> None:
-        with self._lock:
-            self.answering += 1
-
-    def end_answer(self) -> None:
-        with self._lock:
-            self.answering -= 1
+    def _context(self, request_id: str, timeout: float) -> Context:
+        return Context(request_id, time.time() + timeout,
+                       lambda msg: self.log_line({"hp": "log", "requestId": request_id, "msg": msg}))
 
     def call(self, request: Request, request_id: str) -> Answer:
-        """Runs the handler on request within the timeout. The caller took a
-        place for it; the place is given back when the handler returns, which
-        may be after the call was answered."""
+        """Runs the handler on request within the timeout, blocking: invoke's
+        way. The caller took a place for it; the place is given back when the
+        handler returns, which may be after the call was answered."""
         start = time.perf_counter()
         timeout = self.cfg.timeout_ms / 1000
-        ctx = Context(request_id, time.time() + timeout,
-                      lambda msg: self.log_line({"hp": "log", "requestId": request_id, "msg": msg}))
-        if self._loop is not None:
-            future = asyncio.run_coroutine_threadsafe(self._run_async(request, ctx), self._loop)
+        ctx = self._context(request_id, timeout)
+        if self._is_async:
+            future = asyncio.run_coroutine_threadsafe(self._run_async(request, ctx), self._own_loop())
         else:
-            future = self._pool.submit(self._run_sync, request, ctx)
+            future = self._executor().submit(self._run_sync, request, ctx)
         try:
             future.result(timeout=timeout)
         except (KeyboardInterrupt, SystemExit):
@@ -335,6 +362,39 @@ class Runtime:
         if not future.done():
             future.cancel()  # a coroutine is cancelled; a function runs on, in its place
             return self._timed(failure(504, "timeout", request_id, "timeout"), start)
+        return self._settled(future, request_id, start)
+
+    async def call_async(self, request: Request, request_id: str) -> Answer:
+        """Runs the handler on request within the timeout: serve's way. A
+        coroutine runs on the running loop, cancelled at the timeout - one that
+        blocks holds the loop up; a function runs in a thread, and on past its
+        timeout. The place the caller took is given back as call's is."""
+        start = time.perf_counter()
+        timeout = self.cfg.timeout_ms / 1000
+        ctx = self._context(request_id, timeout)
+        try:
+            async with asyncio.timeout(timeout) as limit:
+                if self._is_async:
+                    value = await self._run_async(request, ctx)
+                else:
+                    value = await asyncio.get_running_loop().run_in_executor(
+                        self._executor(), self._run_sync, request, ctx)
+        except TimeoutError as error:
+            if limit.expired():
+                return self._timed(failure(504, "timeout", request_id, "timeout"), start)
+            return self._failed(request_id, error, start)  # the handler's own
+        except asyncio.CancelledError:
+            raise
+        except BaseException as error:
+            return self._failed(request_id, error, start)
+        try:
+            answer = to_answer(value, self.cfg.max_body_size)
+        except CallError as error:
+            return self._failed(request_id, error, start)
+        return self._timed(answer, start)
+
+    def _settled(self, future, request_id: str, start: float) -> Answer:
+        """The answer to a call whose handler is done, from its future."""
         if future.cancelled():
             return self._failed(request_id, CallError("the handler was cancelled"), start)
         error = future.exception()

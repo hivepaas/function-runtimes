@@ -228,5 +228,102 @@ class CallTest(unittest.TestCase):
         self.assertIn("base64", "\n".join(errors))
 
 
+class CallAsyncTest(unittest.IsolatedAsyncioTestCase):
+    """How serve calls a handler: on its event loop for a coroutine, in a thread
+    for a function."""
+
+    def runtime(self, handler, timeout_ms=1000, max_concurrency=16):
+        lines, errors = [], []
+        cfg = load_config({"HP_FN_TIMEOUT_MS": str(timeout_ms), "HP_FN_MAX_CONCURRENCY": str(max_concurrency)})
+        runtime = Runtime(handler, cfg, out=lines.append, err=errors.append)
+        self.addCleanup(runtime.close)
+        return runtime, lines
+
+    async def call(self, runtime, request_id="id-1"):
+        self.assertTrue(runtime.try_reserve())
+        return await runtime.call_async(request_of("GET", "/", [], b""), request_id)
+
+    async def test_a_coroutine_runs_on_the_callers_loop(self):
+        loop = asyncio.get_running_loop()
+
+        async def handler(req, ctx):
+            ctx.log("on", "loop")
+            return {"body": "same loop" if asyncio.get_running_loop() is loop else "another loop"}
+
+        runtime, lines = self.runtime(handler)
+        answer = await self.call(runtime)
+        self.assertEqual((answer.status, answer.body, answer.outcome), (200, b"same loop", "ok"))
+        self.assertIn('{"hp":"log","requestId":"id-1","msg":"on loop"}', lines)
+
+    async def test_a_function_runs_in_a_thread_and_keeps_its_place_past_its_timeout(self):
+        release = threading.Event()
+        loop_thread = threading.current_thread()
+        threads = []
+
+        def handler(req, ctx):
+            threads.append(threading.current_thread())
+            release.wait(5)
+
+        runtime, _ = self.runtime(handler, timeout_ms=50, max_concurrency=1)
+        answer = await self.call(runtime)
+        self.assertEqual((answer.status, answer.outcome), (504, "timeout"))
+        self.assertIsNot(threads[0], loop_thread)
+        self.assertFalse(runtime.try_reserve())
+        release.set()
+        for _ in range(200):
+            if runtime.try_reserve():
+                break
+            await asyncio.sleep(0.005)
+        else:
+            self.fail("the place was not given back")
+
+    async def test_a_coroutine_is_cancelled_at_its_timeout_and_gives_its_place_back(self):
+        cancelled = asyncio.Event()
+
+        async def handler(req, ctx):
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        runtime, _ = self.runtime(handler, timeout_ms=50, max_concurrency=1)
+        answer = await self.call(runtime)
+        self.assertEqual((answer.status, answer.outcome), (504, "timeout"))
+        await asyncio.wait_for(cancelled.wait(), 1)
+        await asyncio.sleep(0)
+        self.assertTrue(runtime.try_reserve())
+
+    async def test_an_error_is_logged_and_not_sent(self):
+        async def handler(req, ctx):
+            raise ValueError("fixture failure")
+
+        lines, errors = [], []
+        runtime = Runtime(handler, load_config({}), out=lines.append, err=errors.append)
+        self.addCleanup(runtime.close)
+        self.assertTrue(runtime.try_reserve())
+        answer = await runtime.call_async(request_of("GET", "/", [], b""), "id-err")
+        self.assertEqual((answer.status, answer.outcome), (500, "error"))
+        self.assertTrue(errors[0].startswith("hivepaas: call id-err failed: ValueError: fixture failure"))
+
+    async def test_places_are_taken_from_what_the_runtime_is_given(self):
+        class Places:
+            def __init__(self):
+                self.taken = []
+
+            def take(self, limit):
+                self.taken.append(limit)
+                return False
+
+            def give(self):
+                pass
+
+        places = Places()
+        runtime = Runtime(lambda req, ctx: None, load_config({"HP_FN_MAX_CONCURRENCY": "7"}), places=places)
+        self.addCleanup(runtime.close)
+        self.assertFalse(runtime.try_reserve())
+        self.assertEqual(places.taken, [7])
+
+
 if __name__ == "__main__":
     unittest.main()

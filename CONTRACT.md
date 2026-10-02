@@ -51,6 +51,7 @@ From the environment. The function's own variables are in the same environment.
 | `HP_FN_MAX_CONCURRENCY` | Calls one instance takes at once. | `16` |
 | `HP_FN_MAX_BODY_SIZE` | Bytes of a request body, and of a response body. | `6291456` (6 MiB) |
 | `HP_FN_PORT` | The port `serve` listens on. | `8080` |
+| `WEB_CONCURRENCY` | Python: how many processes `serve` runs, at most `HP_FN_MAX_CONCURRENCY`. | as many as the container's CPUs, below |
 
 A value that is not a positive whole number stops the runtime before it serves.
 
@@ -85,6 +86,17 @@ module path, so the function's own modules import by name:
 def handler(req, ctx):
     return {"status": 200, "body": {"hello": req.query.get("name")}}
 ```
+
+Python serves with several processes, each loading the handler itself: as
+many as the container's CPUs - its CPU quota, rounded up, else the CPUs it may
+run on - at most `HP_FN_MAX_CONCURRENCY`, and at most one per 128 MiB of its
+memory limit; `WEB_CONCURRENCY` sets the number. What a module keeps in memory
+is its process's; `HP_FN_MAX_CONCURRENCY` counts the calls of every process
+together. A coroutine runs on its process's event loop: one that blocks holds
+up the other calls of its process, and its timeout is answered only when it
+gives the loop back. Blocking code belongs in a plain function, which runs in a
+thread. `serve` says on standard error, as it starts, `hivepaas: serving with
+4 processes`.
 
 Go. A package of the function's module; the types are the package
 `github.com/hivepaas/function-runtimes/hivepaas`:
@@ -169,7 +181,11 @@ answered at once, but it keeps its place among the running calls until the
 handler returns, so the concurrency limit counts what really runs.
 
 `serve` keeps an idle connection for 5 minutes, longer than a proxy in front of
-it keeps one, so that the proxy is the one that closes it.
+it keeps one, so that the proxy is the one that closes it. A connection is kept
+between calls: for HTTP/1.1 unless the request says `Connection: close`; for
+HTTP/1.0 when the request says `Connection: keep-alive`, which the answer says
+back. `serve` listens on IPv6 and IPv4 where the host has both, on IPv4
+otherwise.
 
 ### Paths of the runtime
 
@@ -201,7 +217,9 @@ with the context's logger is:
 {"hp":"log","requestId":"…","msg":"…"}
 ```
 
-What the handler prints itself is passed through as it is. The runtime's own
+What the handler prints itself is passed through as it is. Python's processes
+write to the same standard output: a line of more than 4 KiB may interleave
+with one another process writes at the same moment. The runtime's own
 errors - a handler that could not be loaded, an error a handler raised - go to
 standard error, as text: a first line `hivepaas: call <id> failed: <error>`, or
 `hivepaas: the handler could not be loaded: <error>`, then the stack where

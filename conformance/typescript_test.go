@@ -25,7 +25,7 @@ func checkTypeScript(t *testing.T, rt runtimeDef, imgs images) {
 	const want = `{"hello":"Ada"}`
 
 	t.Run("a TypeScript handler, served", func(t *testing.T) {
-		c := startServe(t, imgs.fixture, "HP_FN_ENTRYPOINT=typed.ts")
+		c := imgs.serve(t, "HP_FN_ENTRYPOINT=typed.ts")
 
 		if r := c.get(t, "/?name=Ada"); r.status != 200 || !sameBody(r.body, []byte(want)) {
 			t.Errorf("%d %q", r.status, r.body)

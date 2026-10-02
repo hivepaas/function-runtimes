@@ -48,6 +48,8 @@ def handler(req, ctx):
         case "/log":
             ctx.log("fixture log line")
             return {"body": "logged"}
+        case "/pid":
+            return {"body": {"pid": os.getpid()}}
         case "/whoami":
             return {"body": {"uid": os.getuid(), "gid": os.getgid()}}
         case "/lib":

@@ -3,6 +3,7 @@
 package conformance
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -48,7 +49,7 @@ func checkImages(t *testing.T, imgs images) {
 }
 
 func checkServe(t *testing.T, rt runtimeDef, imgs images) {
-	c := startServe(t, imgs.fixture, "HP_FN_TIMEOUT_MS=1000", "HP_FN_MAX_BODY_SIZE=4096", "GREETING=hi")
+	c := imgs.serve(t, "HP_FN_TIMEOUT_MS=1000", "HP_FN_MAX_BODY_SIZE=4096", "GREETING=hi")
 
 	t.Run("a body is sent with the type it has", func(t *testing.T) {
 		for _, tc := range []struct{ path, contentType, body string }{
@@ -252,6 +253,47 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 		}
 	})
 
+	t.Run("an HTTP/1.0 connection asked to be kept is kept", func(t *testing.T) {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(c.url, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		reader := bufio.NewReader(conn)
+		for i := range 2 {
+			if _, err := io.WriteString(conn, "GET /text HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
+				t.Fatalf("request %d: %v", i, err)
+			}
+			resp, err := http.ReadResponse(reader, nil)
+			if err != nil {
+				t.Fatalf("response %d: %v", i, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			// An HTTP/1.0 client keeps the connection only when the answer says so.
+			if resp.StatusCode != 200 || string(body) != "hello" ||
+				!strings.EqualFold(resp.Header.Get("Connection"), "keep-alive") {
+				t.Errorf("response %d: %d %q, Connection %q", i, resp.StatusCode, body, resp.Header.Get("Connection"))
+			}
+		}
+	})
+
+	t.Run("it answers on IPv4, and on IPv6 where its container has it", func(t *testing.T) {
+		hosts := []string{"127.0.0.1"}
+		if strings.TrimSpace(docker(t, "exec", c.id, "cat", "/proc/net/if_inet6")) != "" {
+			hosts = append(hosts, "::1")
+		}
+		for _, host := range hosts {
+			script := `exec 3<>/dev/tcp/` + host + `/8080 && ` +
+				`printf 'GET /_hivepaas/health HTTP/1.0\r\n\r\n' >&3 && cat <&3`
+			out := docker(t, "exec", c.id, "bash", "-c", script)
+			if !strings.Contains(out, " 200 ") || !strings.Contains(out, `"ok"`) {
+				t.Errorf("%s: %q", host, out)
+			}
+		}
+	})
+
 	t.Run("the runtime's paths", func(t *testing.T) {
 		if r := c.get(t, "/_hivepaas/health"); r.status != 200 || r.json(t)["status"] != "ok" {
 			t.Errorf("health: %d %q", r.status, r.body)
@@ -276,7 +318,7 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 	})
 
 	t.Run("calls over the concurrency are turned away", func(t *testing.T) {
-		one := startServe(t, imgs.fixture, "HP_FN_MAX_CONCURRENCY=1", "HP_FN_TIMEOUT_MS=5000")
+		one := imgs.serve(t, "HP_FN_MAX_CONCURRENCY=1", "HP_FN_TIMEOUT_MS=5000")
 		slow := one.background("/slow?ms=1500")
 		time.Sleep(500 * time.Millisecond)
 
@@ -292,7 +334,7 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 	})
 
 	t.Run("stopping lets the running call finish", func(t *testing.T) {
-		stopped := startServe(t, imgs.fixture, "HP_FN_TIMEOUT_MS=5000")
+		stopped := imgs.serve(t, "HP_FN_TIMEOUT_MS=5000")
 		slow := stopped.background("/slow?ms=1000")
 		time.Sleep(300 * time.Millisecond)
 
@@ -312,7 +354,7 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 
 	if !rt.compiled {
 		t.Run("a handler that cannot be loaded", func(t *testing.T) {
-			broken := startServe(t, imgs.fixture, "HP_FN_HANDLER=missing")
+			broken := imgs.serve(t, "HP_FN_HANDLER=missing")
 
 			if r := broken.get(t, "/_hivepaas/health"); r.status != 503 || r.json(t)["status"] != "unavailable" {
 				t.Errorf("health: %d %q", r.status, r.body)

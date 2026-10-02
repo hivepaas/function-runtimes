@@ -27,6 +27,14 @@ type images struct {
 	// source is the fixture not built yet, in the build image (compiled
 	// runtimes only): what a test run starts from.
 	source string
+	// env is given to every fixture serve starts, before a check's own.
+	env []string
+}
+
+// serve starts the fixture's serve with the images' env, then env.
+func (imgs images) serve(t *testing.T, env ...string) *container {
+	t.Helper()
+	return startServe(t, imgs.fixture, append(slices.Clone(imgs.env), env...)...)
 }
 
 func buildImages(t *testing.T, rt runtimeDef) images {

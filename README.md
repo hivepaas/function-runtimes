@@ -6,7 +6,7 @@ turns a handler into a server.
 | Runtime | Language | Image |
 |---|---|---|
 | `node24` | Node.js 24: JavaScript, and TypeScript with its types removed | `ghcr.io/hivepaas/function-runtime-node24` |
-| `python313` | Python 3.13 | `ghcr.io/hivepaas/function-runtime-python313` |
+| `python313` | Python 3.13, a process per CPU | `ghcr.io/hivepaas/function-runtime-python313` |
 | `go127` | Go 1.27 | `ghcr.io/hivepaas/function-runtime-go127`, compiled in `function-runtime-go127-build` |
 
 What a handler can count on, and what the images promise, is the contract:

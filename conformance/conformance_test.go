@@ -27,12 +27,15 @@ type runtimeDef struct {
 	compiled bool
 	// typeScript is how the runtime runs a TypeScript handler.
 	typeScript typeScript
+	// processes: the runtime serves with several processes, as many as
+	// WEB_CONCURRENCY says; serve's checks run with several and with one.
+	processes bool
 }
 
 var runtimes = []runtimeDef{
 	{name: "go127", compiled: true},
 	{name: "node24", typeScript: typesRemoved},
-	{name: "python313"},
+	{name: "python313", processes: true},
 }
 
 func TestConformance(t *testing.T) {
@@ -41,6 +44,12 @@ func TestConformance(t *testing.T) {
 			imgs := buildImages(t, rt)
 			t.Run("image", func(t *testing.T) { checkImages(t, imgs) })
 			t.Run("serve", func(t *testing.T) { checkServe(t, rt, imgs) })
+			if rt.processes {
+				one := imgs
+				one.env = []string{"WEB_CONCURRENCY=1"}
+				t.Run("serve, one process", func(t *testing.T) { checkServe(t, rt, one) })
+				t.Run("processes", func(t *testing.T) { checkProcesses(t, imgs) })
+			}
 			t.Run("invoke", func(t *testing.T) { checkInvoke(t, rt, imgs) })
 			if rt.typeScript != noTypeScript {
 				t.Run("typescript", func(t *testing.T) { checkTypeScript(t, rt, imgs) })
