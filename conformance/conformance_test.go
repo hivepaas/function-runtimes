@@ -2,7 +2,7 @@
 
 // Package conformance checks every runtime image against CONTRACT.md. For each
 // runtime it builds the runtime's image and the fixture function on it
-// (fixtures/<runtime>), then calls the fixture through serve and invoke.
+// (fixtures/<runtime>, or the one its language shares), then calls the fixture through serve and invoke.
 //
 // It needs Docker, and Docker Hub for the base images:
 //
@@ -30,11 +30,22 @@ type runtimeDef struct {
 	// processes: the runtime serves with several processes, as many as
 	// WEB_CONCURRENCY says; serve's checks run with several and with one.
 	processes bool
+	// fixture is the directory of fixtures/ the runtime's fixture is built
+	// from, when it is not the runtime's name: runtimes of one language share
+	// it.
+	fixture string
+}
+
+func (rt runtimeDef) fixtureName() string {
+	if rt.fixture != "" {
+		return rt.fixture
+	}
+	return rt.name
 }
 
 var runtimes = []runtimeDef{
 	{name: "go127", compiled: true},
-	{name: "node24", typeScript: typesRemoved},
+	{name: "node24", typeScript: typesRemoved, fixture: "js"},
 	{name: "python313", processes: true},
 }
 

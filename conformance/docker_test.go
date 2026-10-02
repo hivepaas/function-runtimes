@@ -44,7 +44,7 @@ func buildImages(t *testing.T, rt runtimeDef) images {
 		t.Fatal(err)
 	}
 	dockerfile := filepath.Join(root, "runtimes", rt.name, "Dockerfile")
-	fixtureDir := filepath.Join(root, "conformance", "fixtures", rt.name)
+	fixtureDir := filepath.Join(root, "conformance", "fixtures", rt.fixtureName())
 	fixtureDockerfile := filepath.Join(fixtureDir, "Dockerfile")
 	imgs := images{
 		runtime: "hp-conformance/runtime-" + rt.name,

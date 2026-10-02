@@ -16,9 +16,11 @@ What a handler can count on, and what the images promise, is the contract:
 
 - `hivepaas/`: the Go package a Go handler is written against, and
   `hivepaas/serve`, the Go runtime itself.
-- `runtimes/<runtime>/`: each runtime's Dockerfile and code.
+- `runtimes/<runtime>/`: each runtime's Dockerfile and code; `runtimes/js/`,
+  the code the JavaScript runtimes share.
 - `conformance/`: the suite every image passes, in `serve` and in `invoke`, with
-  a fixture function per runtime in `conformance/fixtures/<runtime>/`.
+  a fixture function per runtime in `conformance/fixtures/<runtime>/`, the
+  JavaScript runtimes' in `conformance/fixtures/js/`.
 
 ## Trying a runtime
 
@@ -43,7 +45,7 @@ The Node.js and Python runtimes have unit tests of their own, run in their base
 images:
 
 ```bash
-docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/node24/test/*.test.mjs'
+docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/js/test/*.test.mjs'
 docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/src/runtimes/python313/runtime \
   python:3.13-slim-trixie python -m unittest discover -s runtimes/python313/tests
 ```

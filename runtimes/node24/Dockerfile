@@ -8,7 +8,7 @@ RUN groupadd --gid 10001 hivepaas \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin hivepaas \
     && mkdir /app \
     && chown hivepaas:hivepaas /app
-COPY runtimes/node24/runtime/ /hivepaas/runtime/
+COPY runtimes/js/runtime/ /hivepaas/runtime/
 RUN chmod 755 /hivepaas/runtime/main.mjs \
     && ln -s /hivepaas/runtime/main.mjs /usr/local/bin/hivepaas-runtime
 ENV NODE_ENV=production

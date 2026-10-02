@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
 
       - name: Test
-        run: docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/node24/test/*.test.mjs'
+        run: docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/js/test/*.test.mjs'
 
   python:
     name: Python runtime
