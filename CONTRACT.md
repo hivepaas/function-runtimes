@@ -45,7 +45,7 @@ From the environment. The function's own variables are in the same environment.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `HP_FN_ENTRYPOINT` | Node.js, Python: the file of the handler, relative to `/app`. Go: the package's directory, relative to the module. | `index.js`, `main.py`, `.` |
+| `HP_FN_ENTRYPOINT` | Node.js, Python: the file of the handler, relative to `/app` - for Node.js a `.js`, `.mjs` or `.cjs` file, or TypeScript's `.ts`, `.mts` or `.cts`. Go: the package's directory, relative to the module. | `index.js`, `main.py`, `.` |
 | `HP_FN_HANDLER` | The handler's name. | `default` (Node.js), `handler` (Python), `Handle` (Go) |
 | `HP_FN_TIMEOUT_MS` | How long one call may take. | `30000` |
 | `HP_FN_MAX_CONCURRENCY` | Calls one instance takes at once. | `16` |
@@ -67,6 +67,16 @@ export default async function (req, ctx) {
   return { status: 200, body: { hello: req.query.name } }
 }
 ```
+
+TypeScript, on Node.js. A `.ts`, `.mts` or `.cts` file runs as Node.js 24 runs
+it: its types are removed as it loads, and are not checked. Only syntax that
+can be removed is allowed - no `enum`, no `namespace` holding values, no
+parameter properties, no `import x = require(...)`, no decorators: a file with
+one cannot be loaded. An import names the file with its extension
+(`./lib/util.ts`), and a type from another file is imported with
+`import type`. `.mts` is an ES module, `.cts` CommonJS, and `.ts` follows
+`package.json`'s `"type"`. `tsconfig.json` is not read, and a `.ts` file under
+`node_modules` is not run.
 
 Python. The handler may be a function or a coroutine. `/app` is first on the
 module path, so the function's own modules import by name:

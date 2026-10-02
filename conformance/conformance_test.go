@@ -25,11 +25,13 @@ type runtimeDef struct {
 	// compiled runtimes build the function in a build image of their own, and
 	// load nothing when they start: a handler that is missing fails the build.
 	compiled bool
+	// typeScript is how the runtime runs a TypeScript handler.
+	typeScript typeScript
 }
 
 var runtimes = []runtimeDef{
 	{name: "go127", compiled: true},
-	{name: "node24"},
+	{name: "node24", typeScript: typesRemoved},
 	{name: "python313"},
 }
 
@@ -40,6 +42,9 @@ func TestConformance(t *testing.T) {
 			t.Run("image", func(t *testing.T) { checkImages(t, imgs) })
 			t.Run("serve", func(t *testing.T) { checkServe(t, rt, imgs) })
 			t.Run("invoke", func(t *testing.T) { checkInvoke(t, rt, imgs) })
+			if rt.typeScript != noTypeScript {
+				t.Run("typescript", func(t *testing.T) { checkTypeScript(t, rt, imgs) })
+			}
 		})
 	}
 }
