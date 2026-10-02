@@ -15,13 +15,15 @@ import (
 	"github.com/hivepaas/function-runtimes/hivepaas"
 )
 
-const usage = "usage: hivepaas-runtime serve|invoke|health"
+const usage = "usage: hivepaas-runtime serve|invoke|call|health"
 
 // Exit codes: a result, a failure, a command or input that cannot be used.
 const (
 	exitOK     = 0
 	exitFailed = 1
 	exitUsage  = 2
+	// exitUnavailable: call found no serve answering.
+	exitUnavailable = 3
 )
 
 const healthTimeout = 3 * time.Second
@@ -38,7 +40,7 @@ func run(h hivepaas.HandlerFunc, args []string, getenv func(string) string,
 	if len(args) > 0 {
 		command = args[0]
 	}
-	if command != "serve" && command != "invoke" && command != "health" {
+	if command != "serve" && command != "invoke" && command != "call" && command != "health" {
 		_, _ = fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
@@ -50,6 +52,8 @@ func run(h hivepaas.HandlerFunc, args []string, getenv func(string) string,
 	switch command {
 	case "invoke":
 		return New(h, cfg, stdout, stderr).Invoke(stdin)
+	case "call": // the handler runs in serve, not here
+		return Call(cfg, stdin, stdout, stderr)
 	case "health":
 		return Health(cfg, stderr)
 	}
