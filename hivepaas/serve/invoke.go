@@ -28,19 +28,9 @@ type invokeRequest struct {
 // result as the last line of the output. It returns the process's exit code:
 // 0 with a result, 2 when the request could not be read.
 func (rt *Runtime) Invoke(in io.Reader) int {
-	input, err := io.ReadAll(in)
+	ir, body, err := readInvokeRequest(in)
 	if err != nil {
-		rt.errOut.write(fmt.Sprintf("hivepaas: reading the request: %v", err))
-		return exitUsage
-	}
-	var ir invokeRequest
-	if err := json.Unmarshal(input, &ir); err != nil {
-		rt.errOut.write(fmt.Sprintf("hivepaas: the request is not JSON: %v", err))
-		return exitUsage
-	}
-	body, err := base64.StdEncoding.DecodeString(ir.Body)
-	if err != nil {
-		rt.errOut.write(fmt.Sprintf("hivepaas: the request's body is not base64: %v", err))
+		rt.errOut.write("hivepaas: " + err.Error())
 		return exitUsage
 	}
 	req := &hivepaas.Request{
@@ -74,6 +64,23 @@ func (rt *Runtime) Invoke(in io.Reader) int {
 	rt.logInvocation(id, req.Method, req.Path, a)
 	rt.writeResult(id, a)
 	return exitOK
+}
+
+// readInvokeRequest reads invoke's request, and its body out of base64.
+func readInvokeRequest(in io.Reader) (*invokeRequest, []byte, error) {
+	input, err := io.ReadAll(in)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading the request: %w", err)
+	}
+	var ir invokeRequest
+	if err := json.Unmarshal(input, &ir); err != nil {
+		return nil, nil, fmt.Errorf("the request is not JSON: %w", err)
+	}
+	body, err := base64.StdEncoding.DecodeString(ir.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the request's body is not base64: %w", err)
+	}
+	return &ir, body, nil
 }
 
 func (rt *Runtime) writeResult(id string, a answer) {

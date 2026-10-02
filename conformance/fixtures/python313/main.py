@@ -50,6 +50,8 @@ def handler(req, ctx):
             return {"body": "logged"}
         case "/pid":
             return {"body": {"pid": os.getpid()}}
+        case "/headers":
+            return {"body": {"names": sorted(req.headers)}}
         case "/whoami":
             return {"body": {"uid": os.getuid(), "gid": os.getgid()}}
         case "/lib":

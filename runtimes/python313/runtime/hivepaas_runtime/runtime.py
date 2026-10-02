@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import binascii
 import concurrent.futures
 import importlib
 import inspect
@@ -18,21 +17,23 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-APP_DIR = "/app"
-RESULT_MARKER = "#hivepaas-result "
+from .wire import (  # noqa: F401 - the configuration is the runtime's too
+    APP_DIR,
+    RESULT_MARKER,
+    Config,
+    ConfigError,
+    load_config,
+    positive_whole_number,
+    read_invoke_request,
+)
+
 # Longer than a proxy in front keeps an idle connection (Traefik: 90s).
 IDLE_TIMEOUT_S = 300
 
 _REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
-_WHOLE_NUMBER = re.compile(r"\+?[0-9]+")
 _TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _BAD_VALUE = re.compile(r"[\r\n\x00]")
-_MAX_LIMIT = 2147483647
 _BODYLESS = (204, 304)
-
-
-class ConfigError(Exception):
-    """A configuration the runtime cannot start with."""
 
 
 class CallError(Exception):
@@ -41,45 +42,6 @@ class CallError(Exception):
     def __init__(self, message: str, outcome: str = "error"):
         super().__init__(message)
         self.outcome = outcome
-
-
-@dataclass(frozen=True)
-class Config:
-    entrypoint: str = "main.py"
-    handler: str = "handler"
-    port: int = 8080
-    timeout_ms: int = 30000
-    max_concurrency: int = 16
-    max_body_size: int = 6291456
-
-
-def load_config(env: Mapping[str, str]) -> Config:
-    entrypoint = env.get("HP_FN_ENTRYPOINT") or "main.py"
-    resolved = os.path.normpath(os.path.join(APP_DIR, entrypoint))
-    if os.path.isabs(entrypoint) or not resolved.startswith(APP_DIR + os.sep) or not entrypoint.endswith(".py"):
-        raise ConfigError(f'HP_FN_ENTRYPOINT is "{entrypoint}", which is not a Python file of the function')
-    return Config(
-        entrypoint=entrypoint,
-        handler=env.get("HP_FN_HANDLER") or "handler",
-        port=_positive(env, "HP_FN_PORT", 8080),
-        timeout_ms=_positive(env, "HP_FN_TIMEOUT_MS", 30000),
-        max_concurrency=_positive(env, "HP_FN_MAX_CONCURRENCY", 16),
-        max_body_size=_positive(env, "HP_FN_MAX_BODY_SIZE", 6291456),
-    )
-
-
-def _positive(env: Mapping[str, str], name: str, fallback: int) -> int:
-    value = env.get(name)
-    if not value:
-        return fallback
-    return positive_whole_number(name, value)
-
-
-def positive_whole_number(name: str, value: str) -> int:
-    """value as a positive whole number; a ConfigError naming name when it is not one."""
-    if not _WHOLE_NUMBER.fullmatch(value) or not 0 < int(value) <= _MAX_LIMIT:
-        raise ConfigError(f'{name} is "{value}", which is not a positive whole number')
-    return int(value)
 
 
 def load_handler(app_dir: str, cfg: Config) -> Callable:
@@ -441,7 +403,7 @@ class Runtime:
         if self.handler is None:
             return 3
         try:
-            method, path, raw_path, header_pairs, body = _invoke_request(data)
+            method, path, raw_path, header_pairs, body = read_invoke_request(data)
         except ValueError as error:
             self._error(f"hivepaas: {error}")
             return 2
@@ -460,32 +422,3 @@ class Runtime:
         }))
         self.closed = True  # nothing after the result, even from a handler still running
         return 0
-
-
-def _invoke_request(data: bytes):
-    try:
-        given = json.loads(data)
-    except (ValueError, UnicodeDecodeError) as error:
-        raise ValueError(f"the request is not JSON: {error}") from None
-    if not isinstance(given, dict):
-        raise ValueError("the request is not a JSON object")
-    encoded = given.get("body") or ""
-    try:
-        if not isinstance(encoded, str):
-            raise binascii.Error
-        body = base64.b64decode(encoded, validate=True)
-    except binascii.Error:
-        raise ValueError("the request's body is not base64") from None
-    path = str(given.get("path") or "/")
-    query = urllib.parse.urlencode(_pairs(given.get("query"), "query"))
-    method = str(given.get("method") or "GET")
-    return method, path, f"{path}?{query}" if query else path, _pairs(given.get("headers"), "headers"), body
-
-
-def _pairs(given, what: str) -> list[tuple[str, str]]:
-    if given is None:
-        return []
-    if not isinstance(given, dict):
-        raise ValueError(f"the request's {what} is not an object")
-    return [(name, str(value)) for name, values in given.items()
-            for value in (values if isinstance(values, list) else [values])]

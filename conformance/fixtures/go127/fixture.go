@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,13 @@ func Handle(ctx context.Context, req *hivepaas.Request) (*hivepaas.Response, err
 	case "/log":
 		hivepaas.Log(ctx, "fixture log line")
 		return hivepaas.Text(200, "logged"), nil
+	case "/headers":
+		names := make([]string, 0, len(req.Headers))
+		for name := range req.Headers {
+			names = append(names, strings.ToLower(name))
+		}
+		slices.Sort(names)
+		return hivepaas.JSON(200, map[string][]string{"names": names})
 	case "/whoami":
 		return hivepaas.JSON(200, map[string]int{"uid": os.Getuid(), "gid": os.Getgid()})
 	case "/lib":

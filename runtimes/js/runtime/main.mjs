@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// hivepaas-runtime for Node.js and Bun: serve, invoke, health and deps, as
+// hivepaas-runtime for Node.js and Bun: serve, invoke, call, health and deps, as
 // CONTRACT.md at the repository's root says.
 import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { text } from 'node:stream/consumers'
 
-import { APP_DIR, ConfigError, DEPS_CACHE, depsCommand, engine, LOCK_FILES, loadConfig, Runtime } from './runtime.mjs'
+// The runtime is loaded only by the commands that run the handler: call hands
+// its request to serve, and starts as fast as a process can.
+import { APP_DIR, ConfigError, DEPS_CACHE, depsCommand, engine, LOCK_FILES, loadConfig } from './wire.mjs'
 
-const USAGE = 'usage: hivepaas-runtime serve|invoke|health|deps'
+const USAGE = 'usage: hivepaas-runtime serve|invoke|call|health|deps'
 // Longer than a proxy in front keeps an idle connection (Traefik: 90s).
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const HEADERS_TIMEOUT_MS = 10 * 1000
@@ -16,7 +18,7 @@ const HEALTH_TIMEOUT_MS = 3 * 1000
 
 async function main(command = 'serve') {
   if (command === 'deps') return deps()
-  if (!['serve', 'invoke', 'health'].includes(command)) {
+  if (!['serve', 'invoke', 'call', 'health'].includes(command)) {
     console.error(USAGE)
     return 2
   }
@@ -29,6 +31,12 @@ async function main(command = 'serve') {
     return 2
   }
   if (command === 'health') return health(cfg)
+  // call hands its request to serve: the handler is not loaded here.
+  if (command === 'call') {
+    const { callServe } = await import('./call.mjs')
+    return callServe(await text(process.stdin), cfg)
+  }
+  const { Runtime } = await import('./runtime.mjs')
   const runtime = await Runtime.load(cfg)
   if (command === 'invoke') return runtime.invoke(await text(process.stdin))
   return serve(runtime, cfg)

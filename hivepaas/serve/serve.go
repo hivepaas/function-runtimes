@@ -138,6 +138,7 @@ func (f *freshConns) closeAll() {
 // ServeHTTP answers one request.
 func (rt *Runtime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := requestID(r.Header.Get("X-Request-Id"))
+	isCall := r.Header.Get(callHeader) == "1"
 	path := r.URL.EscapedPath()
 	if strings.HasPrefix(path, "/_hivepaas/") {
 		rt.serveOwnPath(w, path, id)
@@ -146,6 +147,10 @@ func (rt *Runtime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	method := strings.ToUpper(r.Method)
 	logged := func(a answer) {
 		rt.logInvocation(id, method, path, a)
+		if isCall {
+			w.Header().Set("X-Hivepaas-Outcome", a.outcome)
+			w.Header().Set("X-Hivepaas-Duration-Ms", strconv.FormatFloat(milliseconds(a.duration), 'f', -1, 64))
+		}
 		writeAnswer(w, id, a)
 	}
 
@@ -172,6 +177,7 @@ func (rt *Runtime) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	headers := r.Header.Clone()
+	headers.Del(callHeader)
 	headers.Set("Host", r.Host) // net/http takes it out of the headers
 	req := &hivepaas.Request{Method: method, Path: path, Query: r.URL.Query(), Headers: headers, Body: body}
 	// A call outlives its client: only its timeout ends it.

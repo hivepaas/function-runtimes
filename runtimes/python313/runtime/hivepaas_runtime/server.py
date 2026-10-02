@@ -10,6 +10,7 @@ import signal
 import socket
 import time
 
+from .call import CALL_HEADER
 from .runtime import IDLE_TIMEOUT_S, Answer, Runtime, failure, request_id_of, request_of
 
 # The head of a request - its line and its headers - is read whole within this
@@ -291,8 +292,9 @@ class _Connection(asyncio.Protocol):
         keep = keep and body is not _TOO_LARGE  # what is left of a body refused is not read
         request_id = request_id_of(head.first("x-request-id"))
         path = head.target.partition("?")[0]
+        is_call = head.first(CALL_HEADER) == "1"
         if path.startswith("/_hivepaas/"):
-            self._send(head, request_id, runtime.own_path(path), keep)
+            self._send(head, request_id, runtime.own_path(path), keep, is_call)
             return
         if body is _TOO_LARGE:
             answer = failure(413, "request too large", request_id, "request_too_large")
@@ -304,26 +306,28 @@ class _Connection(asyncio.Protocol):
         else:
             self.busy = True
             self.server.busy += 1
-            self.loop.create_task(self._call(head, body, request_id, path, keep))
+            self.loop.create_task(self._call(head, body, request_id, path, keep, is_call))
             return
         runtime.log_invocation(request_id, head.method.upper(), path, answer)
-        self._send(head, request_id, answer, keep)
+        self._send(head, request_id, answer, keep, is_call)
 
-    async def _call(self, head: _Head, body: bytes, request_id: str, path: str, keep: bool) -> None:
+    async def _call(self, head: _Head, body: bytes, request_id: str, path: str, keep: bool,
+                    is_call: bool) -> None:
         try:
-            answer = await self.runtime.call_async(request_of(head.method, head.target, head.headers, body),
-                                                   request_id)
+            headers = [(name, value) for name, value in head.headers if name.lower() != CALL_HEADER]
+            answer = await self.runtime.call_async(request_of(head.method, head.target, headers, body), request_id)
             self.runtime.log_invocation(request_id, head.method.upper(), path, answer)
             self.busy = False
-            self._send(head, request_id, answer, keep)
+            self._send(head, request_id, answer, keep, is_call)
         finally:
             self.busy = False
             self.server.busy -= 1
         if not self.transport.is_closing():
             self._advance()
 
-    def _send(self, head: _Head, request_id: str, answer: Answer, keep: bool) -> None:
-        """Writes the answer; closes the connection after it unless it is kept."""
+    def _send(self, head: _Head, request_id: str, answer: Answer, keep: bool, is_call: bool = False) -> None:
+        """Writes the answer, and to a call what the runtime made of it; closes
+        the connection after it unless it is kept."""
         keep = keep and not self.ended and not self.runtime.stopping
         lines = [f"HTTP/1.1 {answer.status} {_REASONS.get(answer.status, '')}", f"date: {self.server.date()}"]
         for name, value in answer.headers.items():
@@ -332,6 +336,9 @@ class _Connection(asyncio.Protocol):
             for one in value if isinstance(value, list) else [value]:
                 lines.append(f"{name}: {one}")
         lines.append(f"x-request-id: {request_id}")
+        if is_call and answer.outcome:
+            lines.append(f"x-hivepaas-outcome: {answer.outcome}")
+            lines.append(f"x-hivepaas-duration-ms: {answer.duration_ms}")
         bodyless = answer.status in _BODYLESS
         if not bodyless:
             lines.append(f"content-length: {len(answer.body)}")

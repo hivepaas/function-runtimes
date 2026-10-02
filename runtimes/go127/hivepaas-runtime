@@ -1,7 +1,7 @@
 #!/bin/sh
 # hivepaas-runtime for Go. deps and build turn the function's module in /app
-# into /app/.hivepaas/function, in the build image; serve, invoke and health run
-# that binary, which holds the runtime. See CONTRACT.md.
+# into /app/.hivepaas/function, in the build image; serve, invoke, call and
+# health run that binary, which holds the runtime. See CONTRACT.md.
 set -eu
 
 app=/app
@@ -100,15 +100,15 @@ command=${1:-serve}
 case "$command" in
 deps) deps ;;
 build) build ;;
-serve | invoke | health)
+serve | invoke | call | health)
 	if [ ! -x "$binary" ]; then
-		[ "$command" != health ] || fail "the function is not built"
+		[ "$command" != health ] && [ "$command" != call ] || fail "the function is not built"
 		build >&2
 	fi
 	exec "$binary" "$@"
 	;;
 *)
-	echo "usage: hivepaas-runtime serve|invoke|health|deps|build" >&2
+	echo "usage: hivepaas-runtime serve|invoke|call|health|deps|build" >&2
 	exit 2
 	;;
 esac

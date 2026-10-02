@@ -21,7 +21,9 @@ def handler(req, ctx):
                      "custom": req.headers.get("x-custom"), "query": req.query_all}}
 
 
-class ServerTest(unittest.IsolatedAsyncioTestCase):
+class _ServerCase(unittest.IsolatedAsyncioTestCase):
+    """A server on a port of its own, and a client's means to talk to it."""
+
     async def asyncSetUp(self):
         await self.start()
 
@@ -57,6 +59,8 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
     async def closed(self, reader):
         return await asyncio.wait_for(reader.read(), 5) == b""
 
+
+class ServerTest(_ServerCase):
     async def test_a_request_is_answered_and_its_connection_kept(self):
         reader, writer = await self.connect()
         for body in (b"one", b"two"):
@@ -199,6 +203,30 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(stopped, 5)
         with self.assertRaises(OSError):
             await asyncio.open_connection("127.0.0.1", self.port)
+
+
+class CallHeaderTest(_ServerCase):
+    async def test_a_call_is_told_its_outcome_and_its_handler_does_not_see_the_header(self):
+        reader, writer = await self.connect()
+        writer.write(b"GET /echo HTTP/1.1\r\nHost: x\r\nX-Hivepaas-Call: 1\r\nX-Custom: v\r\n\r\n")
+        status, headers, body = await self.response(reader)
+        self.assertEqual((status, headers.get("x-hivepaas-outcome")), (200, "ok"))
+        float(headers["x-hivepaas-duration-ms"])
+        self.assertEqual(json.loads(body)["custom"], "v")
+        self.assertFalse(any("x-hivepaas-call" in line for line in self.seen_headers))
+
+        writer.write(b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n")
+        _, headers, _ = await self.response(reader)
+        self.assertNotIn("x-hivepaas-outcome", headers)
+
+    async def asyncSetUp(self):
+        self.seen_headers = []
+
+        def remembering(req, ctx):
+            self.seen_headers.append(" ".join(req.headers))
+            return handler(req, ctx)
+
+        await self.start(fn=remembering)
 
 
 class ListenTest(unittest.TestCase):

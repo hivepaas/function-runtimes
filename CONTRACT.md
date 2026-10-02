@@ -31,6 +31,7 @@ every `1.x.y` image keeps v1. A later contract is a new major, beside this one.
 |---|---|
 | `serve` | Answers HTTP until stopped. On `SIGTERM` it takes no new connection, waits for the running calls, at most one timeout, and exits. |
 | `invoke` | Calls the handler once, with a request read on standard input, and exits. |
+| `call` | Hands one request, read on standard input as `invoke` reads it, to `serve` on this container, writes its answer as `invoke` writes a result, and exits. |
 | `health` | Exits 0 when the server on this container answers its health check. |
 | `deps` | Installs the function's libraries from its manifest in `/app`. Node.js: `package.json`, with `npm ci`, or `npm install` that makes `package-lock.json` when there is none. Bun: `package.json`, with `bun install --frozen-lockfile`, or `bun install` that makes `bun.lock` when there is none - from `package-lock.json` when there is one. Python: `requirements.txt`, resolved into `requirements.lock` when there is none, then installed into `/app/.venv` with `uv`. Go, in the build image: the modules `go.mod` requires. Without a manifest it does nothing. |
 | `build` | Go only, in the build image: compiles the function in `/app` with the runtime into `/app/.hivepaas/function`. It first tidies `go.mod` and `go.sum`: what the code imports is added, at the versions it resolves, and the runtime module is required at the image's version. In the build image, `serve` and `invoke` build first when the function is not built. |
@@ -255,3 +256,29 @@ after the result, even by a handler still running past its timeout.
 It exits 0 when it wrote a result, whatever the status; 2 when the request on
 its input could not be read; 3 when the handler could not be loaded, or, in Go's
 build image, the function could not be built. Exits 2 and 3 write no result.
+
+### Call
+
+`hivepaas-runtime call` reads on standard input the request `invoke` reads, and
+sends it to `serve` on this container, at `127.0.0.1` and `HP_FN_PORT`, with the
+header `X-Hivepaas-Call: 1`. It writes the answer as `invoke` writes its result -
+the last line of standard output, after the marker - and nothing else: the
+call's log lines are `serve`'s, in the container's log, with its request id.
+The result's `headers` leave out what is the connection's (`content-length`,
+`connection`, `date`) and the runtime's `x-hivepaas-*`; its `requestId` is the
+answer's `x-request-id`; its `durationMs` and `outcome` are what `serve` says of
+the call.
+
+An answer 429 is waited for - `Retry-After` - and the request sent again, for as
+long as `HP_FN_TIMEOUT_MS` from the start allows; then the 429 is the result,
+outcome `throttled`. `call` waits for an answer at most `HP_FN_TIMEOUT_MS` and ten
+seconds. A path under `/_hivepaas/` is answered by the runtime, as `serve`
+answers it.
+
+It exits 0 when it wrote a result, whatever the status; 2 when the request on
+its input could not be read; 3 when `serve` does not answer. Exits 2 and 3 write
+no result.
+
+`serve` answers a request with `X-Hivepaas-Call: 1` as any other, adding
+`X-Hivepaas-Outcome` - the `outcome` of its invocation line - and
+`X-Hivepaas-Duration-Ms`; the handler does not see the header.

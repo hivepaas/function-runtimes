@@ -44,6 +44,8 @@ export default async function (req, ctx) {
     case '/log':
       ctx.log('fixture log line')
       return { body: 'logged' }
+    case '/headers':
+      return { body: { names: Object.keys(req.headers).sort() } }
     case '/whoami':
       return { body: { uid: process.getuid(), gid: process.getgid() } }
     case '/lib':
