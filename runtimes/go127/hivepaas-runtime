@@ -43,10 +43,15 @@ build() {
 	[ -f go.mod ] || fail "the function has no go.mod"
 	handler=${HP_FN_HANDLER:-Handle}
 	entrypoint=${HP_FN_ENTRYPOINT:-.}
-	printf '%s\n' "$handler" | grep -Eq '^[A-Z][A-Za-z0-9_]*$' ||
-		fail "HP_FN_HANDLER is \"$handler\", which is not an exported Go name"
+	# Both are written into the Go source below, so each is a plain name. A
+	# case pattern sees a newline, which a line-by-line grep does not.
+	case "$handler" in
+	[!A-Z]* | *[!A-Za-z0-9_]*) fail "HP_FN_HANDLER is \"$handler\", which is not an exported Go name" ;;
+	esac
 	case "/$entrypoint/" in
-	*/../* | //*) fail "HP_FN_ENTRYPOINT is \"$entrypoint\", which is not a directory of the module" ;;
+	*[!A-Za-z0-9._/-]* | */../* | //*)
+		fail "HP_FN_ENTRYPOINT is \"$entrypoint\", which is not a directory of the module"
+		;;
 	esac
 
 	with_runtime go mod tidy || fail "go mod tidy failed"

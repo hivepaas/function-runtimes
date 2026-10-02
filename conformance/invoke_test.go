@@ -182,6 +182,22 @@ func checkInvoke(t *testing.T, rt runtimeDef, imgs images) {
 	})
 
 	if rt.compiled {
+		// The handler and the entrypoint are written into the Go source the
+		// build compiles: anything but a plain name is refused before it is.
+		t.Run("a handler or an entrypoint that is not a plain name", func(t *testing.T) {
+			for env, says := range map[string]string{
+				"HP_FN_HANDLER=Handle\nfunc": "not an exported Go name",
+				`HP_FN_ENTRYPOINT=x"y`:       "not a directory of the module",
+				"HP_FN_ENTRYPOINT=x\ny":      "not a directory of the module",
+			} {
+				r := invoke(t, imgs.source, `{}`, env)
+
+				if r.code != 3 || !strings.Contains(r.stderr, says) {
+					t.Errorf("%q: exit %d\n%s", env, r.code, lastLines(r.stderr))
+				}
+			}
+		})
+
 		t.Run("a function not built yet is built first", func(t *testing.T) {
 			r := invoke(t, imgs.source, `{"path":"/text"}`)
 
