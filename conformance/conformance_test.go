@@ -67,6 +67,7 @@ func TestConformance(t *testing.T) {
 				t.Run("processes", func(t *testing.T) { checkProcesses(t, imgs) })
 			}
 			t.Run("invoke", func(t *testing.T) { checkInvoke(t, rt, imgs) })
+			t.Run("call", func(t *testing.T) { checkCall(t, imgs) })
 			if rt.typeScript != noTypeScript {
 				t.Run("typescript", func(t *testing.T) { checkTypeScript(t, rt, imgs) })
 			}

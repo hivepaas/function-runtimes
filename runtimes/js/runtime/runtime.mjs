@@ -7,54 +7,20 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { format } from 'node:util'
 
-export const APP_DIR = '/app'
-export const RESULT_MARKER = '#hivepaas-result '
+import { CALL_HEADER } from './call.mjs'
+import { APP_DIR, invokeRequest, RESULT_MARKER } from './wire.mjs'
+
+export { CALL_HEADER, callServe } from './call.mjs'
+export {
+  APP_DIR, ConfigError, DEPS_CACHE, depsCommand, engine, LOCK_FILES, loadConfig, RESULT_MARKER,
+} from './wire.mjs'
+
 
 const REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/
-const WHOLE_NUMBER = /^\+?[0-9]+$/
-const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
-const MAX_LIMIT = 2147483647
 const BODYLESS = new Set([204, 304])
 const EMPTY = Buffer.alloc(0)
 const TIMEOUT = Symbol('timeout')
 const TOO_LARGE = Symbol('too large')
-
-// Where deps keeps what it downloads while it installs; removed after.
-export const DEPS_CACHE = '/tmp/hivepaas-deps-cache'
-
-/** engine is what runs the runtime: 'bun' or 'node'. */
-export function engine() {
-  return process.versions.bun ? 'bun' : 'node'
-}
-
-// Each engine's default entrypoint: Bun runs TypeScript whole.
-const DEFAULT_ENTRYPOINT = { node: 'index.js', bun: 'index.ts' }
-
-/** Each engine's lock file of package.json's dependencies. */
-export const LOCK_FILES = { node: 'package-lock.json', bun: 'bun.lock' }
-
-/**
- * depsCommand installs package.json's dependencies with the engine's own
- * manager: from its lock file when there is one (locked), which it makes when
- * there is none. Bun reads an npm lock file to make its own.
- */
-export function depsCommand(runOn, locked) {
-  if (runOn === 'bun') {
-    return {
-      command: 'bun',
-      args: ['install', '--production', ...(locked ? ['--frozen-lockfile'] : [])],
-      env: { BUN_INSTALL_CACHE_DIR: DEPS_CACHE },
-    }
-  }
-  return {
-    command: 'npm',
-    args: [locked ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund', '--cache', DEPS_CACHE],
-    env: {},
-  }
-}
-
-/** A configuration the runtime cannot start with. */
-export class ConfigError extends Error {}
 
 /** A call that failed; outcome says how. */
 class CallError extends Error {
@@ -62,31 +28,6 @@ class CallError extends Error {
     super(message)
     this.outcome = outcome
   }
-}
-
-export function loadConfig(env, runOn = engine()) {
-  const entrypoint = env.HP_FN_ENTRYPOINT || DEFAULT_ENTRYPOINT[runOn]
-  if (path.isAbsolute(entrypoint) || !path.resolve(APP_DIR, entrypoint).startsWith(APP_DIR + path.sep)) {
-    throw new ConfigError(`HP_FN_ENTRYPOINT is "${entrypoint}", which is not a file of the function`)
-  }
-  return {
-    entrypoint,
-    handler: env.HP_FN_HANDLER || 'default',
-    port: positive(env, 'HP_FN_PORT', 8080),
-    timeoutMs: positive(env, 'HP_FN_TIMEOUT_MS', 30000),
-    maxConcurrency: positive(env, 'HP_FN_MAX_CONCURRENCY', 16),
-    maxBodySize: positive(env, 'HP_FN_MAX_BODY_SIZE', 6291456),
-  }
-}
-
-function positive(env, name, fallback) {
-  const value = env[name]
-  if (value === undefined || value === '') return fallback
-  const n = Number(value)
-  if (!WHOLE_NUMBER.test(value) || n <= 0 || n > MAX_LIMIT) {
-    throw new ConfigError(`${name} is "${value}", which is not a positive whole number`)
-  }
-  return n
 }
 
 /** The handler: the module's export cfg.handler names, ES module or CommonJS. */
@@ -199,6 +140,14 @@ function requestId(sent) {
   return REQUEST_ID.test(sent ?? '') ? sent : randomBytes(16).toString('hex')
 }
 
+function withoutHeader(rawHeaders, name) {
+  const kept = []
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    if (rawHeaders[i].toLowerCase() !== name) kept.push(rawHeaders[i], rawHeaders[i + 1])
+  }
+  return kept
+}
+
 function firstHeader(rawHeaders, name) {
   for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
     if (rawHeaders[i].toLowerCase() === name) return rawHeaders[i + 1]
@@ -292,16 +241,17 @@ export class Runtime {
 
   async serve(req, res) {
     const id = requestId(firstHeader(req.rawHeaders, 'x-request-id'))
+    const isCall = firstHeader(req.rawHeaders, CALL_HEADER) === '1'
     const q = req.url.indexOf('?')
     const urlPath = q === -1 ? req.url : req.url.slice(0, q)
     if (urlPath.startsWith('/_hivepaas/')) {
-      this.send(res, id, this.ownPath(urlPath))
+      this.send(res, id, this.ownPath(urlPath), isCall)
       return
     }
     const method = req.method.toUpperCase()
     const answer = (a) => {
       this.logInvocation(id, method, urlPath, a)
-      this.send(res, id, a)
+      this.send(res, id, a, isCall)
     }
 
     // A body refused unread closes the connection: what is left of it is not read.
@@ -335,7 +285,7 @@ export class Runtime {
       answer(throttled)
       return
     }
-    answer(await this.call(requestOf(req.method, req.url, req.rawHeaders, body), id))
+    answer(await this.call(requestOf(req.method, req.url, withoutHeader(req.rawHeaders, CALL_HEADER), body), id))
   }
 
   ownPath(urlPath) {
@@ -345,13 +295,18 @@ export class Runtime {
     return own(404, { error: 'not found' })
   }
 
-  send(res, id, answer) {
+  /** send writes answer; to a call, what the runtime made of it too. */
+  send(res, id, answer, isCall = false) {
     for (const [name, value] of Object.entries(answer.headers)) res.setHeader(name, value)
     res.removeHeader('transfer-encoding')
     res.setHeader('x-request-id', id)
     if (BODYLESS.has(answer.status)) res.removeHeader('content-length')
     else res.setHeader('content-length', answer.body.length)
     if (this.stopping) res.setHeader('connection', 'close')
+    if (isCall && answer.outcome !== undefined) {
+      res.setHeader('x-hivepaas-outcome', answer.outcome)
+      res.setHeader('x-hivepaas-duration-ms', String(answer.durationMs ?? 0))
+    }
     res.writeHead(answer.status)
     res.end(answer.body)
   }
@@ -411,34 +366,4 @@ function readBody(req, cfg) {
       if (!req.complete) reject(new Error('the client went away'))
     })
   })
-}
-
-/** invokeRequest reads invoke's input: JSON, every field optional. */
-function invokeRequest(input) {
-  let given
-  try {
-    given = JSON.parse(input)
-  } catch (e) {
-    throw new Error(`the request is not JSON: ${e.message}`)
-  }
-  if (given === null || typeof given !== 'object' || Array.isArray(given)) {
-    throw new Error('the request is not a JSON object')
-  }
-  const encoded = given.body ?? ''
-  if (typeof encoded !== 'string' || !BASE64.test(encoded)) throw new Error("the request's body is not base64")
-  const urlPath = given.path || '/'
-  const query = new URLSearchParams(pairs(given.query, 'query')).toString()
-  return {
-    method: given.method || 'GET',
-    path: urlPath,
-    url: query === '' ? urlPath : `${urlPath}?${query}`,
-    rawHeaders: pairs(given.headers, 'headers').flat(),
-    body: Buffer.from(encoded, 'base64'),
-  }
-}
-
-function pairs(given, what) {
-  if (given === undefined || given === null) return []
-  if (typeof given !== 'object' || Array.isArray(given)) throw new Error(`the request's ${what} is not an object`)
-  return Object.entries(given).flatMap(([name, values]) => [values].flat().map((value) => [name, String(value)]))
 }
