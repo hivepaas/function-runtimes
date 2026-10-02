@@ -14,11 +14,11 @@ every `1.x.y` image keeps v1. A later contract is a new major, beside this one.
 | | |
 |---|---|
 | Name | `ghcr.io/hivepaas/function-runtime-<runtime>:<version>` |
-| Runtimes | `node24`, `python313`, `go127` |
+| Runtimes | `node24`, `bun1`, `python313`, `go127` |
 | Go's build image | `ghcr.io/hivepaas/function-runtime-go127-build:<version>`. A Go function is compiled in this image, which holds the toolchain, and runs in `function-runtime-go127`, which does not. |
-| Base | Debian 13 (trixie), slim; Go's build image is the full `golang` image |
+| Base | Debian 13 (trixie), slim - Bun's is `oven/bun`'s slim image, on it; Go's build image is the full `golang` image |
 | The function's code | `/app`, the working directory |
-| The function's libraries | Node.js: `/app/node_modules`. Python: the virtual environment `/app/.venv`. Go: the module cache, in the build image. |
+| The function's libraries | Node.js and Bun: `/app/node_modules`. Python: the virtual environment `/app/.venv`. Go: the module cache, in the build image. |
 | The runtime's own code | `/hivepaas`, and the command `hivepaas-runtime` on the `PATH` |
 | User | `hivepaas`, uid and gid 10001. The function never runs as root. |
 | Port | 8080 (`HP_FN_PORT`) |
@@ -32,7 +32,7 @@ every `1.x.y` image keeps v1. A later contract is a new major, beside this one.
 | `serve` | Answers HTTP until stopped. On `SIGTERM` it takes no new connection, waits for the running calls, at most one timeout, and exits. |
 | `invoke` | Calls the handler once, with a request read on standard input, and exits. |
 | `health` | Exits 0 when the server on this container answers its health check. |
-| `deps` | Installs the function's libraries from its manifest in `/app`. Node.js: `package.json`, with `npm ci`, or `npm install` that makes `package-lock.json` when there is none. Python: `requirements.txt`, resolved into `requirements.lock` when there is none, then installed into `/app/.venv` with `uv`. Go, in the build image: the modules `go.mod` requires. Without a manifest it does nothing. |
+| `deps` | Installs the function's libraries from its manifest in `/app`. Node.js: `package.json`, with `npm ci`, or `npm install` that makes `package-lock.json` when there is none. Bun: `package.json`, with `bun install --frozen-lockfile`, or `bun install` that makes `bun.lock` when there is none - from `package-lock.json` when there is one. Python: `requirements.txt`, resolved into `requirements.lock` when there is none, then installed into `/app/.venv` with `uv`. Go, in the build image: the modules `go.mod` requires. Without a manifest it does nothing. |
 | `build` | Go only, in the build image: compiles the function in `/app` with the runtime into `/app/.hivepaas/function`. It first tidies `go.mod` and `go.sum`: what the code imports is added, at the versions it resolves, and the runtime module is required at the image's version. In the build image, `serve` and `invoke` build first when the function is not built. |
 
 A command exits 2 when it, its configuration or its input cannot be used, and
@@ -45,8 +45,8 @@ From the environment. The function's own variables are in the same environment.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `HP_FN_ENTRYPOINT` | Node.js, Python: the file of the handler, relative to `/app` - for Node.js a `.js`, `.mjs` or `.cjs` file, or TypeScript's `.ts`, `.mts` or `.cts`. Go: the package's directory, relative to the module. | `index.js`, `main.py`, `.` |
-| `HP_FN_HANDLER` | The handler's name. | `default` (Node.js), `handler` (Python), `Handle` (Go) |
+| `HP_FN_ENTRYPOINT` | Node.js, Bun, Python: the file of the handler, relative to `/app` - for Node.js and Bun a `.js`, `.mjs` or `.cjs` file, or TypeScript's `.ts`, `.mts` or `.cts`. Go: the package's directory, relative to the module. | `index.js` (Node.js), `index.ts` (Bun), `main.py`, `.` |
+| `HP_FN_HANDLER` | The handler's name. | `default` (Node.js, Bun), `handler` (Python), `Handle` (Go) |
 | `HP_FN_TIMEOUT_MS` | How long one call may take. | `30000` |
 | `HP_FN_MAX_CONCURRENCY` | Calls one instance takes at once. | `16` |
 | `HP_FN_MAX_BODY_SIZE` | Bytes of a request body, and of a response body. | `6291456` (6 MiB) |
@@ -60,7 +60,7 @@ compiled in.
 
 ### The handler
 
-Node.js. The module may be ES or CommonJS; the handler is its default export, or
+Node.js and Bun. The module may be ES or CommonJS; the handler is its default export, or
 the export `HP_FN_HANDLER` names:
 
 ```js
@@ -78,6 +78,10 @@ one cannot be loaded. An import names the file with its extension
 `import type`. `.mts` is an ES module, `.cts` CommonJS, and `.ts` follows
 `package.json`'s `"type"`. `tsconfig.json` is not read, and a `.ts` file under
 `node_modules` is not run.
+
+TypeScript, on Bun, runs whole: Bun transpiles it, `enum`, `namespace` and
+parameter properties included; an import may leave out `.ts`, and
+`tsconfig.json`'s `paths` apply. Its types are not checked either.
 
 Python. The handler may be a function or a coroutine. `/app` is first on the
 module path, so the function's own modules import by name:
@@ -109,7 +113,7 @@ func Handle(ctx context.Context, req *hivepaas.Request) (*hivepaas.Response, err
 
 ### The request
 
-| | Node.js | Python | Go |
+| | Node.js, Bun | Python | Go |
 |---|---|---|---|
 | Method, in upper case | `req.method` | `req.method` | `req.Method` |
 | Path, without the query, as sent (still percent-encoded) | `req.path` | `req.path` | `req.Path` |
@@ -120,7 +124,7 @@ func Handle(ctx context.Context, req *hivepaas.Request) (*hivepaas.Response, err
 | Body, as text | `req.text()` | `req.text()` | `req.Text()` |
 | Body, as JSON | `req.json()` | `req.json()` | `req.JSON(&v)` |
 
-A header sent several times is, in Node.js and Python, one value, its values
+A header sent several times is, in Node.js, Bun and Python, one value, its values
 joined by `, `; in Go, `req.Headers.Get(name)` is its first value and
 `req.Headers.Values(name)` every one. `host` is among the headers.
 
@@ -131,7 +135,7 @@ not see it and nothing is logged.
 
 ### The context
 
-| | Node.js | Python | Go |
+| | Node.js, Bun | Python | Go |
 |---|---|---|---|
 | The call's id | `ctx.requestId` | `ctx.request_id` | `hivepaas.RequestID(ctx)` |
 | When the call times out | `ctx.deadline` (milliseconds since the epoch) | `ctx.deadline` (seconds since the epoch) | `ctx.Deadline()` |
@@ -144,7 +148,7 @@ carries it in `X-Request-Id`.
 
 ### The response
 
-Node.js and Python: an object (a dict) with any of `status`, `headers`, `body`;
+Node.js, Bun and Python: an object (a dict) with any of `status`, `headers`, `body`;
 or nothing. `headers` maps a name to a value, or to a list of values for a
 header sent several times.
 
@@ -184,7 +188,7 @@ handler returns, so the concurrency limit counts what really runs.
 it keeps one, so that the proxy is the one that closes it. A connection is kept
 between calls: for HTTP/1.1 unless the request says `Connection: close`; for
 HTTP/1.0 when the request says `Connection: keep-alive`, which the answer says
-back. `serve` listens on IPv6 and IPv4 where the host has both, on IPv4
+back - but Bun, whose answer to HTTP/1.0 says `Connection: close` and closes. `serve` listens on IPv6 and IPv4 where the host has both, on IPv4
 otherwise.
 
 ### Paths of the runtime

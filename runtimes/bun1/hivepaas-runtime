@@ -1,0 +1,4 @@
+#!/bin/sh
+# hivepaas-runtime for Bun: the JavaScript runtime's code, run by Bun. See
+# CONTRACT.md.
+exec bun /hivepaas/runtime/main.mjs "$@"

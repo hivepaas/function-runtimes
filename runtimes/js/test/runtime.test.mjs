@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { loadConfig, loadHandler, requestOf, Runtime, toAnswer } from '../runtime/runtime.mjs'
+import { depsCommand, loadConfig, loadHandler, requestOf, Runtime, toAnswer } from '../runtime/runtime.mjs'
 
 const defaults = loadConfig({})
 
@@ -15,6 +15,22 @@ test('the defaults are the contract’s', () => {
     entrypoint: 'index.js', handler: 'default', port: 8080,
     timeoutMs: 30000, maxConcurrency: 16, maxBodySize: 6291456,
   })
+})
+
+test('Bun’s default entrypoint is TypeScript', () => {
+  assert.equal(loadConfig({}, 'bun').entrypoint, 'index.ts')
+  assert.equal(loadConfig({}, 'node').entrypoint, 'index.js')
+  assert.equal(loadConfig({ HP_FN_ENTRYPOINT: 'main.mjs' }, 'bun').entrypoint, 'main.mjs')
+})
+
+test('deps installs with the engine’s own manager, from its lock file when there is one', () => {
+  const npm = ['--omit=dev', '--no-audit', '--no-fund', '--cache', '/tmp/hivepaas-deps-cache']
+  assert.deepEqual(depsCommand('node', true), { command: 'npm', args: ['ci', ...npm], env: {} })
+  assert.deepEqual(depsCommand('node', false), { command: 'npm', args: ['install', ...npm], env: {} })
+  const bunEnv = { BUN_INSTALL_CACHE_DIR: '/tmp/hivepaas-deps-cache' }
+  assert.deepEqual(depsCommand('bun', true),
+    { command: 'bun', args: ['install', '--production', '--frozen-lockfile'], env: bunEnv })
+  assert.deepEqual(depsCommand('bun', false), { command: 'bun', args: ['install', '--production'], env: bunEnv })
 })
 
 test('the environment sets the limits', () => {

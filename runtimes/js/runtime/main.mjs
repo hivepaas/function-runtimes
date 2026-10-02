@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// hivepaas-runtime for Node.js: serve, invoke, health and deps, as CONTRACT.md
-// at the repository's root says.
+// hivepaas-runtime for Node.js and Bun: serve, invoke, health and deps, as
+// CONTRACT.md at the repository's root says.
 import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { text } from 'node:stream/consumers'
 
-import { APP_DIR, ConfigError, loadConfig, Runtime } from './runtime.mjs'
+import { APP_DIR, ConfigError, DEPS_CACHE, depsCommand, engine, LOCK_FILES, loadConfig, Runtime } from './runtime.mjs'
 
 const USAGE = 'usage: hivepaas-runtime serve|invoke|health|deps'
 // Longer than a proxy in front keeps an idle connection (Traefik: 90s).
@@ -74,18 +74,15 @@ function health(cfg) {
   })
 }
 
-/** deps installs package.json's dependencies; npm install makes the lock file when there is none. */
+/** deps installs package.json's dependencies with the engine's manager, which makes the lock file when there is none. */
 function deps() {
   if (!existsSync(`${APP_DIR}/package.json`)) return 0
-  const install = existsSync(`${APP_DIR}/package-lock.json`) ? 'ci' : 'install'
-  const cache = '/tmp/hivepaas-npm-cache'
-  const npm = spawnSync('npm', [install, '--omit=dev', '--no-audit', '--no-fund', '--cache', cache], {
-    cwd: APP_DIR,
-    stdio: 'inherit',
-  })
-  rmSync(cache, { recursive: true, force: true })
-  if (npm.error) console.error(`hivepaas: ${npm.error.message}`)
-  return npm.status ?? 1
+  const runOn = engine()
+  const { command, args, env } = depsCommand(runOn, existsSync(`${APP_DIR}/${LOCK_FILES[runOn]}`))
+  const install = spawnSync(command, args, { cwd: APP_DIR, stdio: 'inherit', env: { ...process.env, ...env } })
+  rmSync(DEPS_CACHE, { recursive: true, force: true })
+  if (install.error) console.error(`hivepaas: ${install.error.message}`)
+  return install.status ?? 1
 }
 
 // Exits at once: an invoke whose handler still runs past its timeout is done.

@@ -30,6 +30,10 @@ type runtimeDef struct {
 	// processes: the runtime serves with several processes, as many as
 	// WEB_CONCURRENCY says; serve's checks run with several and with one.
 	processes bool
+	// closesHTTP10: the runtime closes an HTTP/1.0 connection after its
+	// answer, which says so, even when the request asks to keep it - Bun's
+	// node:http does.
+	closesHTTP10 bool
 	// fixture is the directory of fixtures/ the runtime's fixture is built
 	// from, when it is not the runtime's name: runtimes of one language share
 	// it.
@@ -46,6 +50,7 @@ func (rt runtimeDef) fixtureName() string {
 var runtimes = []runtimeDef{
 	{name: "go127", compiled: true},
 	{name: "node24", typeScript: typesRemoved, fixture: "js"},
+	{name: "bun1", typeScript: wholeTypeScript, closesHTTP10: true, fixture: "js"},
 	{name: "python313", processes: true},
 }
 

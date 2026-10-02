@@ -16,6 +16,9 @@ const (
 	// typesRemoved: the types are removed as a file loads, and syntax that
 	// cannot be removed - an enum - cannot be loaded.
 	typesRemoved
+	// wholeTypeScript: TypeScript is transpiled - an enum runs, an import may
+	// leave out its extension.
+	wholeTypeScript
 )
 
 // checkTypeScript calls the fixture's TypeScript handler, typed.ts, through
@@ -39,6 +42,21 @@ func checkTypeScript(t *testing.T, rt runtimeDef, imgs images) {
 			t.Errorf("result %+v\n%s", res, lastLines(r.stderr))
 		}
 	})
+
+	if rt.typeScript == wholeTypeScript {
+		t.Run("TypeScript whole: an enum, an import without its extension", func(t *testing.T) {
+			for input, want := range map[string]string{
+				`{"query":{"name":["Ada"]}}`: `{"hello":"Ada"}`,
+				`{}`:                         `{"hello":"hello"}`,
+			} {
+				r := invoke(t, imgs.fixture, input, "HP_FN_ENTRYPOINT=whole.ts")
+
+				if res := parseResult(t, r); res.Status != 200 || !sameBody(res.body(t), []byte(want)) {
+					t.Errorf("%s: result %+v\n%s", input, res, lastLines(r.stderr))
+				}
+			}
+		})
+	}
 
 	if rt.typeScript == typesRemoved {
 		t.Run("an enum cannot be loaded: the types are only removed", func(t *testing.T) {

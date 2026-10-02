@@ -253,7 +253,7 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 		}
 	})
 
-	t.Run("an HTTP/1.0 connection asked to be kept is kept", func(t *testing.T) {
+	t.Run("an HTTP/1.0 connection asked to be kept is kept, or said to close", func(t *testing.T) {
 		conn, err := net.Dial("tcp", strings.TrimPrefix(c.url, "http://"))
 		if err != nil {
 			t.Fatal(err)
@@ -261,6 +261,24 @@ func checkServe(t *testing.T, rt runtimeDef, imgs images) {
 		defer conn.Close()
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		reader := bufio.NewReader(conn)
+		if rt.closesHTTP10 {
+			// Said, so that an HTTP/1.0 client does not wait for more.
+			_, _ = io.WriteString(conn, "GET /text HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")
+			resp, err := http.ReadResponse(reader, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			// Go reads "Connection: close" into Close, and takes it out of the headers.
+			if resp.StatusCode != 200 || !resp.Close {
+				t.Errorf("%d, close %v", resp.StatusCode, resp.Close)
+			}
+			if _, err := reader.ReadByte(); err != io.EOF {
+				t.Errorf("the connection was kept: %v", err)
+			}
+			return
+		}
 		for i := range 2 {
 			if _, err := io.WriteString(conn, "GET /text HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
 				t.Fatalf("request %d: %v", i, err)

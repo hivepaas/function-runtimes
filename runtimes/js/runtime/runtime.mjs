@@ -1,5 +1,6 @@
-// The Node.js function runtime: how a handler is loaded and called, and what
-// its calls answer. See CONTRACT.md at the repository's root.
+// The JavaScript function runtime, on Node.js or on Bun: how a handler is
+// loaded and called, and what its calls answer. See CONTRACT.md at the
+// repository's root.
 import { randomBytes } from 'node:crypto'
 import http from 'node:http'
 import path from 'node:path'
@@ -18,6 +19,40 @@ const EMPTY = Buffer.alloc(0)
 const TIMEOUT = Symbol('timeout')
 const TOO_LARGE = Symbol('too large')
 
+// Where deps keeps what it downloads while it installs; removed after.
+export const DEPS_CACHE = '/tmp/hivepaas-deps-cache'
+
+/** engine is what runs the runtime: 'bun' or 'node'. */
+export function engine() {
+  return process.versions.bun ? 'bun' : 'node'
+}
+
+// Each engine's default entrypoint: Bun runs TypeScript whole.
+const DEFAULT_ENTRYPOINT = { node: 'index.js', bun: 'index.ts' }
+
+/** Each engine's lock file of package.json's dependencies. */
+export const LOCK_FILES = { node: 'package-lock.json', bun: 'bun.lock' }
+
+/**
+ * depsCommand installs package.json's dependencies with the engine's own
+ * manager: from its lock file when there is one (locked), which it makes when
+ * there is none. Bun reads an npm lock file to make its own.
+ */
+export function depsCommand(runOn, locked) {
+  if (runOn === 'bun') {
+    return {
+      command: 'bun',
+      args: ['install', '--production', ...(locked ? ['--frozen-lockfile'] : [])],
+      env: { BUN_INSTALL_CACHE_DIR: DEPS_CACHE },
+    }
+  }
+  return {
+    command: 'npm',
+    args: [locked ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund', '--cache', DEPS_CACHE],
+    env: {},
+  }
+}
+
 /** A configuration the runtime cannot start with. */
 export class ConfigError extends Error {}
 
@@ -29,8 +64,8 @@ class CallError extends Error {
   }
 }
 
-export function loadConfig(env) {
-  const entrypoint = env.HP_FN_ENTRYPOINT || 'index.js'
+export function loadConfig(env, runOn = engine()) {
+  const entrypoint = env.HP_FN_ENTRYPOINT || DEFAULT_ENTRYPOINT[runOn]
   if (path.isAbsolute(entrypoint) || !path.resolve(APP_DIR, entrypoint).startsWith(APP_DIR + path.sep)) {
     throw new ConfigError(`HP_FN_ENTRYPOINT is "${entrypoint}", which is not a file of the function`)
   }

@@ -30,7 +30,7 @@ jobs:
         run: go test -race -count=1 ./...
 
       - name: Shell scripts
-        run: shellcheck runtimes/go127/hivepaas-runtime runtimes/python313/hivepaas-runtime
+        run: shellcheck runtimes/go127/hivepaas-runtime runtimes/python313/hivepaas-runtime runtimes/bun1/hivepaas-runtime
 
   node:
     name: Node.js runtime
@@ -66,7 +66,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [go127, node24, python313]
+        runtime: [go127, node24, bun1, python313]
         arch: [amd64, arm64]
         include:
           - { arch: amd64, runner: ubuntu-24.04 }
