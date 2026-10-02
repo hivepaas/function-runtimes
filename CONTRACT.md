@@ -98,8 +98,9 @@ func Handle(ctx context.Context, req *hivepaas.Request) (*hivepaas.Response, err
 | Body, as text | `req.text()` | `req.text()` | `req.Text()` |
 | Body, as JSON | `req.json()` | `req.json()` | `req.JSON(&v)` |
 
-A header sent several times is one value, its values joined by `, `. `host` is
-among the headers.
+A header sent several times is, in Node.js and Python, one value, its values
+joined by `, `; in Go, `req.Headers.Get(name)` is its first value and
+`req.Headers.Values(name)` every one. `host` is among the headers.
 
 A call starts once its request has been received whole. A request whose body
 does not arrive - the client went away, or took longer than `HP_FN_TIMEOUT_MS`
