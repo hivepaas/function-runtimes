@@ -59,6 +59,18 @@ jobs:
           -e PYTHONPATH=/src/runtimes/python313/runtime -e PYTHONDONTWRITEBYTECODE=1
           python:3.13-slim-trixie python -m unittest discover -s runtimes/python313/tests
 
+  php:
+    name: PHP runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test
+        run: docker run --rm -v "$PWD:/src:ro" -w /src php:8.5-cli-trixie php runtimes/php85/tests/run.php
+
   # Every image, built and called the way HivePaaS will, on both architectures
   # it is published for.
   conformance:
@@ -66,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runtime: [go127, node24, bun1, python313]
+        runtime: [go127, node24, bun1, python313, php85]
         arch: [amd64, arm64]
         include:
           - { arch: amd64, runner: ubuntu-24.04 }

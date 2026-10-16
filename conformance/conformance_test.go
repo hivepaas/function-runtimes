@@ -52,6 +52,7 @@ var runtimes = []runtimeDef{
 	{name: "node24", typeScript: typesRemoved, fixture: "js"},
 	{name: "bun1", typeScript: wholeTypeScript, closesHTTP10: true, fixture: "js"},
 	{name: "python313", processes: true},
+	{name: "php85", processes: true},
 }
 
 func TestConformance(t *testing.T) {

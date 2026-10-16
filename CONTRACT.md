@@ -14,11 +14,12 @@ every `1.x.y` image keeps v1. A later contract is a new major, beside this one.
 | | |
 |---|---|
 | Name | `ghcr.io/hivepaas/function-runtime-<runtime>:<version>` |
-| Runtimes | `node24`, `bun1`, `python313`, `go127` |
+| Runtimes | `node24`, `bun1`, `python313`, `php85`, `go127` |
 | Go's build image | `ghcr.io/hivepaas/function-runtime-go127-build:<version>`. A Go function is compiled in this image, which holds the toolchain, and runs in `function-runtime-go127`, which does not. |
-| Base | Debian 13 (trixie), slim - Bun's is `oven/bun`'s slim image, on it; Go's build image is the full `golang` image |
+| Base | Debian 13 (trixie), slim - Bun's is `oven/bun`'s slim image, on it; PHP's the official `php` CLI image, on it; Go's build image is the full `golang` image |
 | The function's code | `/app`, the working directory |
-| The function's libraries | Node.js and Bun: `/app/node_modules`. Python: the virtual environment `/app/.venv`. Go: the module cache, in the build image. |
+| The function's libraries | Node.js and Bun: `/app/node_modules`. Python: the virtual environment `/app/.venv`. PHP: `/app/vendor`, with Composer's autoloader. Go: the module cache, in the build image. |
+| PHP's extensions | Those of the official image, and `bcmath`, `exif`, `gd`, `gmp`, `intl`, `mysqli`, `opcache`, `pdo_mysql`, `pdo_pgsql`, `pgsql`, `redis`, `sockets`, `zip`. Composer cannot add one. |
 | The runtime's own code | `/hivepaas`, and the command `hivepaas-runtime` on the `PATH` |
 | User | `hivepaas`, uid and gid 10001. The function never runs as root. |
 | Port | 8080 (`HP_FN_PORT`) |
@@ -33,7 +34,7 @@ every `1.x.y` image keeps v1. A later contract is a new major, beside this one.
 | `invoke` | Calls the handler once, with a request read on standard input, and exits. |
 | `call` | Hands one request, read on standard input as `invoke` reads it, to `serve` on this container, writes its answer as `invoke` writes a result, and exits. |
 | `health` | Exits 0 when the server on this container answers its health check. |
-| `deps` | Installs the function's libraries from its manifest in `/app`. Node.js: `package.json`, with `npm ci`, or `npm install` that makes `package-lock.json` when there is none. Bun: `package.json`, with `bun install --frozen-lockfile`, or `bun install` that makes `bun.lock` when there is none - from `package-lock.json` when there is one. Python: `requirements.txt`, resolved into `requirements.lock` when there is none, then installed into `/app/.venv` with `uv`. Go, in the build image: the modules `go.mod` requires. Without a manifest it does nothing. |
+| `deps` | Installs the function's libraries from its manifest in `/app`. Node.js: `package.json`, with `npm ci`, or `npm install` that makes `package-lock.json` when there is none. Bun: `package.json`, with `bun install --frozen-lockfile`, or `bun install` that makes `bun.lock` when there is none - from `package-lock.json` when there is one. Python: `requirements.txt`, resolved into `requirements.lock` when there is none, then installed into `/app/.venv` with `uv`. PHP: `composer.json`, with `composer install --no-dev`, from `composer.lock`, which it writes when there is none; `auth.json` beside it has the credentials of private repositories. Go, in the build image: the modules `go.mod` requires. Without a manifest it does nothing. |
 | `build` | Go only, in the build image: compiles the function in `/app` with the runtime into `/app/.hivepaas/function`. It first tidies `go.mod` and `go.sum`: what the code imports is added, at the versions it resolves, and the runtime module is required at the image's version. In the build image, `serve` and `invoke` build first when the function is not built. |
 
 A command exits 2 when it, its configuration or its input cannot be used, and
@@ -46,13 +47,13 @@ From the environment. The function's own variables are in the same environment.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `HP_FN_ENTRYPOINT` | Node.js, Bun, Python: the file of the handler, relative to `/app` - for Node.js and Bun a `.js`, `.mjs` or `.cjs` file, or TypeScript's `.ts`, `.mts` or `.cts`. Go: the package's directory, relative to the module. | `index.js` (Node.js), `index.ts` (Bun), `main.py`, `.` |
-| `HP_FN_HANDLER` | The handler's name. | `default` (Node.js, Bun), `handler` (Python), `Handle` (Go) |
+| `HP_FN_ENTRYPOINT` | Node.js, Bun, Python, PHP: the file of the handler, relative to `/app` - for Node.js and Bun a `.js`, `.mjs` or `.cjs` file, or TypeScript's `.ts`, `.mts` or `.cts`. Go: the package's directory, relative to the module. | `index.js` (Node.js), `index.ts` (Bun), `main.py`, `index.php`, `.` |
+| `HP_FN_HANDLER` | The handler's name. PHP: a function's, with its namespace (`App\handle`), or a static method (`Handler::handle`). | `default` (Node.js, Bun), `handler` (Python, PHP), `Handle` (Go) |
 | `HP_FN_TIMEOUT_MS` | How long one call may take. | `30000` |
 | `HP_FN_MAX_CONCURRENCY` | Calls one instance takes at once. | `16` |
 | `HP_FN_MAX_BODY_SIZE` | Bytes of a request body, and of a response body. | `6291456` (6 MiB) |
 | `HP_FN_PORT` | The port `serve` listens on. | `8080` |
-| `WEB_CONCURRENCY` | Python: how many processes `serve` runs, at most `HP_FN_MAX_CONCURRENCY`. | as many as the container's CPUs, below |
+| `WEB_CONCURRENCY` | Python: how many processes `serve` runs, at most `HP_FN_MAX_CONCURRENCY`. PHP: the same, all of them started at once. | Python: as many as the container's CPUs, below. PHP: started as calls need them, below |
 
 A value that is not a positive whole number stops the runtime before it serves.
 
@@ -103,6 +104,39 @@ gives the loop back. Blocking code belongs in a plain function, which runs in a
 thread. `serve` says on standard error, as it starts, `hivepaas: serving with
 4 processes`.
 
+PHP. The handler is a function the entrypoint declares, given a
+`Hivepaas\Request` and a `Hivepaas\Context`. The entrypoint is loaded once by
+each process, after Composer's autoloader when there is `/app/vendor`, at the
+top level: its variables are global, as when PHP runs the file itself.
+
+```php
+<?php
+
+function handler(Hivepaas\Request $req, Hivepaas\Context $ctx): array
+{
+    return ['status' => 200, 'body' => ['hello' => $req->query['name'] ?? null]];
+}
+```
+
+PHP serves with several processes, each loading the handler itself and running
+one call at a time: they are started as calls need them - one is kept - up to
+`HP_FN_MAX_CONCURRENCY` and one per 32 MiB of the container's memory limit; every
+30 seconds, those above the most calls that ran at once in that time are
+stopped. `WEB_CONCURRENCY`
+sets how many, all started at once. What a variable keeps is its process's, from
+one call to the next. The server is the Go runtime's, which hands each call to
+an idle process; `serve` says on standard error, as it starts, `hivepaas:
+serving with 1 to 8 processes, as many as the calls need`, or `with 4 processes`.
+A call that outlives its timeout cannot be interrupted in PHP: its process is
+stopped, and another takes its place. A handler that ends its process - `exit`,
+a fatal error such as running out of `memory_limit` - fails its call, and the
+process is replaced. What `echo` and `print` write goes to the log, not to the
+response, and `header()` does nothing: the response is what the handler
+returns. The runtime's settings are production's, `memory_limit` 128M, errors
+on standard error; a `php.ini` in `/app` is read after them. OPcache is in the
+image, off for a process that compiles its code once: `opcache.enable_cli` in
+the function's `php.ini` turns it on, its JIT with it.
+
 Go. A package of the function's module; the types are the package
 `github.com/hivepaas/function-runtimes/hivepaas`:
 
@@ -114,19 +148,19 @@ func Handle(ctx context.Context, req *hivepaas.Request) (*hivepaas.Response, err
 
 ### The request
 
-| | Node.js, Bun | Python | Go |
-|---|---|---|---|
-| Method, in upper case | `req.method` | `req.method` | `req.Method` |
-| Path, without the query, as sent (still percent-encoded) | `req.path` | `req.path` | `req.Path` |
-| Query: the first value of each name | `req.query` | `req.query` | `req.Query.Get(name)` |
-| Query: every value of each name | `req.queryAll` | `req.query_all` | `req.Query[name]` |
-| Headers, by name in lower case | `req.headers` | `req.headers` | `req.Headers.Get(name)` |
-| Body, as bytes | `req.body` (Buffer) | `req.body` (bytes) | `req.Body` |
-| Body, as text | `req.text()` | `req.text()` | `req.Text()` |
-| Body, as JSON | `req.json()` | `req.json()` | `req.JSON(&v)` |
+| | Node.js, Bun | Python | PHP | Go |
+|---|---|---|---|---|
+| Method, in upper case | `req.method` | `req.method` | `$req->method` | `req.Method` |
+| Path, without the query, as sent (still percent-encoded) | `req.path` | `req.path` | `$req->path` | `req.Path` |
+| Query: the first value of each name | `req.query` | `req.query` | `$req->query[$name]` | `req.Query.Get(name)` |
+| Query: every value of each name | `req.queryAll` | `req.query_all` | `$req->queryAll[$name]` | `req.Query[name]` |
+| Headers, by name in lower case | `req.headers` | `req.headers` | `$req->headers[$name]` | `req.Headers.Get(name)` |
+| Body, as bytes | `req.body` (Buffer) | `req.body` (bytes) | `$req->body` (string) | `req.Body` |
+| Body, as text | `req.text()` | `req.text()` | `$req->text()` | `req.Text()` |
+| Body, as JSON | `req.json()` | `req.json()` | `$req->json()`, objects as arrays | `req.JSON(&v)` |
 
-A header sent several times is, in Node.js, Bun and Python, one value, its values
-joined by `, `; in Go, `req.Headers.Get(name)` is its first value and
+A header sent several times is, in Node.js, Bun, Python and PHP, one value, its
+values joined by `, `; in Go, `req.Headers.Get(name)` is its first value and
 `req.Headers.Values(name)` every one. `host` is among the headers.
 
 A call starts once its request has been received whole. A request whose body
@@ -136,12 +170,12 @@ not see it and nothing is logged.
 
 ### The context
 
-| | Node.js, Bun | Python | Go |
-|---|---|---|---|
-| The call's id | `ctx.requestId` | `ctx.request_id` | `hivepaas.RequestID(ctx)` |
-| When the call times out | `ctx.deadline` (milliseconds since the epoch) | `ctx.deadline` (seconds since the epoch) | `ctx.Deadline()` |
-| Aborted at the timeout | `ctx.signal` (an `AbortSignal`) | - | `ctx.Done()` |
-| A log line carrying the id | `ctx.log(...)` | `ctx.log(...)` | `hivepaas.Log(ctx, ...)` |
+| | Node.js, Bun | Python | PHP | Go |
+|---|---|---|---|---|
+| The call's id | `ctx.requestId` | `ctx.request_id` | `$ctx->requestId` | `hivepaas.RequestID(ctx)` |
+| When the call times out | `ctx.deadline` (milliseconds since the epoch) | `ctx.deadline` (seconds since the epoch) | `$ctx->deadline` (seconds since the epoch, as `microtime(true)`) | `ctx.Deadline()` |
+| Aborted at the timeout | `ctx.signal` (an `AbortSignal`) | - | - (the process is stopped) | `ctx.Done()` |
+| A log line carrying the id | `ctx.log(...)` | `ctx.log(...)` | `$ctx->log(...)` | `hivepaas.Log(ctx, ...)` |
 
 The call's id is the request's `X-Request-Id` when it has one of 1 to 128
 letters, digits, `.`, `_` or `-`; otherwise the runtime makes one. Every response
@@ -149,17 +183,18 @@ carries it in `X-Request-Id`.
 
 ### The response
 
-Node.js, Bun and Python: an object (a dict) with any of `status`, `headers`, `body`;
-or nothing. `headers` maps a name to a value, or to a list of values for a
-header sent several times.
+Node.js, Bun, Python and PHP: an object (a dict, an array with keys) with any of
+`status`, `headers`, `body`; or nothing (PHP: `null`). `headers` maps a name to
+a value, or to a list of values for a header sent several times. In PHP, a list
+is not a response, and a status is an `int`.
 
 | Returned | Status | Body |
 |---|---|---|
 | nothing (`undefined`, `None`, a nil response) | 204 | none |
 | no `status` | 200 | |
 | a `status` that is not a whole number from 200 to 599 | 500 | the error of a failed call |
-| `body` text | | as it is, `text/plain; charset=utf-8` |
-| `body` bytes (Buffer, `bytes`) | | as they are, `application/octet-stream` |
+| `body` text (PHP: a string) | | as it is, `text/plain; charset=utf-8` |
+| `body` bytes (Buffer, `bytes`, `Hivepaas\Bytes`) | | as they are, `application/octet-stream` |
 | `body` anything else (an object, a list, a number) | | as JSON, `application/json` |
 
 A `Content-Type` among the headers replaces the one the body would have. Go
@@ -183,7 +218,8 @@ without its body. The runtime sets `Content-Length` and `X-Request-Id` itself.
 
 The error itself is never sent: it is in the log. A call that times out is
 answered at once, but it keeps its place among the running calls until the
-handler returns, so the concurrency limit counts what really runs.
+handler returns, so the concurrency limit counts what really runs. In PHP the
+handler's process is stopped at the timeout, and the place is free at once.
 
 `serve` keeps an idle connection for 5 minutes, longer than a proxy in front of
 it keeps one, so that the proxy is the one that closes it. A connection is kept
@@ -224,7 +260,10 @@ with the context's logger is:
 
 What the handler prints itself is passed through as it is. Python's processes
 write to the same standard output: a line of more than 4 KiB may interleave
-with one another process writes at the same moment. The runtime's own
+with one another process writes at the same moment. PHP's processes print
+through the server, which passes their lines on whole, one at a time, a call's
+before the call is answered; a line of more than 64 KiB is passed on in pieces.
+PHP's warnings and errors are lines of standard error: `PHP Warning:  …`. The runtime's own
 errors - a handler that could not be loaded, an error a handler raised - go to
 standard error, as text: a first line `hivepaas: call <id> failed: <error>`, or
 `hivepaas: the handler could not be loaded: <error>`, then the stack where

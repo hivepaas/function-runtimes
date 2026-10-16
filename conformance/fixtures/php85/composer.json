@@ -1,0 +1,11 @@
+{
+    "name": "hivepaas/conformance-fixture",
+    "type": "project",
+    "require": {
+        "hivepaas/fixture-lib": "*"
+    },
+    "repositories": [
+        { "type": "path", "url": "lib-src", "options": { "symlink": false } },
+        { "packagist.org": false }
+    ]
+}

@@ -30,6 +30,7 @@ const (
 	outcomeThrottled        = "throttled"
 	outcomeRequestTooLarge  = "request_too_large"
 	outcomeResponseTooLarge = "response_too_large"
+	outcomeNotLoaded        = "not_loaded"
 )
 
 const (
@@ -44,7 +45,19 @@ const (
 var (
 	errHandlerPanicked  = errors.New("the handler panicked")
 	errStatusOutOfRange = errors.New("the response's status is not from 200 to 599")
-	errResponseTooLarge = errors.New("the response's body is larger than HP_FN_MAX_BODY_SIZE")
+)
+
+// Errors a handler of a runtime that runs the function in other processes
+// returns, for what those processes found.
+var (
+	// ErrNotLoaded: the handler could not be loaded. The call is answered 500,
+	// outcome not_loaded, and logged as no failure of its own: the reason was
+	// written when the load failed.
+	ErrNotLoaded = errors.New("the handler could not be loaded")
+	// ErrResponseTooLarge: the response's body is larger than
+	// HP_FN_MAX_BODY_SIZE. The call is answered 500, outcome
+	// response_too_large.
+	ErrResponseTooLarge = errors.New("the response's body is larger than HP_FN_MAX_BODY_SIZE")
 )
 
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
@@ -56,6 +69,8 @@ type Runtime struct {
 	out     *lineWriter
 	errOut  *lineWriter
 	slots   chan struct{}
+	// loaded says whether the handler is loaded; nil for one compiled in.
+	loaded func() bool
 }
 
 // New is a runtime for h. Its log goes to out, its errors to errOut.
@@ -67,6 +82,25 @@ func New(h hivepaas.HandlerFunc, cfg Config, out, errOut io.Writer) *Runtime {
 		errOut:  &lineWriter{w: errOut},
 		slots:   make(chan struct{}, cfg.MaxConcurrency),
 	}
+}
+
+// SetLoaded tells the runtime whether its handler is loaded, for one that is
+// loaded as the runtime starts rather than compiled in: while loaded answers
+// false, the health check answers 503. It is called before Serve.
+func (rt *Runtime) SetLoaded(loaded func() bool) {
+	rt.loaded = loaded
+}
+
+// Output writes line to the runtime's standard output, whole, as one line:
+// what the function printed in another process, passed through. Nothing is
+// written after invoke's result.
+func (rt *Runtime) Output(line string) {
+	rt.out.write(line)
+}
+
+// ErrorOutput writes line to the runtime's standard error, whole.
+func (rt *Runtime) ErrorOutput(line string) {
+	rt.errOut.write(line)
 }
 
 // Serve answers on l until ctx ends, then waits for the running calls, at
@@ -209,6 +243,10 @@ func (rt *Runtime) readBody(w http.ResponseWriter, r *http.Request) ([]byte, err
 
 func (rt *Runtime) serveOwnPath(w http.ResponseWriter, path, id string) {
 	if path == "/_hivepaas/health" {
+		if rt.loaded != nil && !rt.loaded() {
+			writeAnswer(w, id, jsonAnswer(http.StatusServiceUnavailable, map[string]string{"status": "unavailable"}))
+			return
+		}
 		writeAnswer(w, id, jsonAnswer(http.StatusOK, map[string]string{"status": "ok"}))
 		return
 	}
@@ -273,7 +311,13 @@ func (rt *Runtime) runHandler(ctx context.Context, req *hivepaas.Request) (h han
 
 // respond turns what the handler returned into the answer.
 func (rt *Runtime) respond(id string, h handled) answer {
-	if h.err != nil {
+	switch {
+	case errors.Is(h.err, ErrNotLoaded):
+		return failure(http.StatusInternalServerError, "internal error", id, outcomeNotLoaded)
+	case errors.Is(h.err, ErrResponseTooLarge):
+		rt.callFailed(id, h.err)
+		return failure(http.StatusInternalServerError, "internal error", id, outcomeResponseTooLarge)
+	case h.err != nil:
 		rt.callFailed(id, h.err)
 		return failure(http.StatusInternalServerError, "internal error", id, outcomeError)
 	}
@@ -289,7 +333,7 @@ func (rt *Runtime) respond(id string, h handled) answer {
 		return failure(http.StatusInternalServerError, "internal error", id, outcomeError)
 	}
 	if size := int64(len(h.resp.Body)); size > rt.cfg.MaxBodySize {
-		rt.callFailed(id, fmt.Errorf("%w: %d bytes, over %d", errResponseTooLarge, size, rt.cfg.MaxBodySize))
+		rt.callFailed(id, fmt.Errorf("%w: %d bytes, over %d", ErrResponseTooLarge, size, rt.cfg.MaxBodySize))
 		return failure(http.StatusInternalServerError, "internal error", id, outcomeResponseTooLarge)
 	}
 	headers := http.Header{}

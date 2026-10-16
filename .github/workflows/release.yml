@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGES: node24 bun1 python313 go127 go127-build
+  IMAGES: node24 bun1 python313 php85 go127 go127-build
 
 jobs:
   check:
@@ -73,12 +73,13 @@ jobs:
       packages: write
     strategy:
       matrix:
-        image: [node24, bun1, python313, go127, go127-build]
+        image: [node24, bun1, python313, php85, go127, go127-build]
         arch: [amd64, arm64]
         include:
           - { image: node24, dockerfile: runtimes/node24/Dockerfile, target: '' }
           - { image: bun1, dockerfile: runtimes/bun1/Dockerfile, target: '' }
           - { image: python313, dockerfile: runtimes/python313/Dockerfile, target: '' }
+          - { image: php85, dockerfile: runtimes/php85/Dockerfile, target: '' }
           - { image: go127, dockerfile: runtimes/go127/Dockerfile, target: run }
           - { image: go127-build, dockerfile: runtimes/go127/Dockerfile, target: build }
           - { arch: amd64, runner: ubuntu-24.04 }

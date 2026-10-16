@@ -8,6 +8,7 @@ turns a handler into a server.
 | `node24` | Node.js 24: JavaScript, and TypeScript with its types removed | `ghcr.io/hivepaas/function-runtime-node24` |
 | `bun1` | Bun 1: JavaScript, and TypeScript whole | `ghcr.io/hivepaas/function-runtime-bun1` |
 | `python313` | Python 3.13, a process per CPU | `ghcr.io/hivepaas/function-runtime-python313` |
+| `php85` | PHP 8.5, a process per call running at once, with Composer | `ghcr.io/hivepaas/function-runtime-php85` |
 | `go127` | Go 1.27 | `ghcr.io/hivepaas/function-runtime-go127`, compiled in `function-runtime-go127-build` |
 
 What a handler can count on, and what the images promise, is the contract:
@@ -18,7 +19,9 @@ What a handler can count on, and what the images promise, is the contract:
 - `hivepaas/`: the Go package a Go handler is written against, and
   `hivepaas/serve`, the Go runtime itself.
 - `runtimes/<runtime>/`: each runtime's Dockerfile and code; `runtimes/js/`,
-  the code the JavaScript runtimes share.
+  the code the JavaScript runtimes share. PHP's server is `hivepaas/serve` too:
+  `runtimes/php85/` is a Go command that hands each call to PHP processes,
+  and the PHP they run, in `runtimes/php85/runtime/`.
 - `conformance/`: the suite every image passes, in `serve` and in `invoke`, with
   a fixture function per runtime in `conformance/fixtures/<runtime>/`, the
   JavaScript runtimes' in `conformance/fixtures/js/`.
@@ -42,13 +45,14 @@ go test -tags conformance ./conformance/         # every runtime image, with doc
 RUNTIMES=node24 go test -tags conformance ./conformance/
 ```
 
-The Node.js and Python runtimes have unit tests of their own, run in their base
-images:
+The Node.js, Python and PHP runtimes have unit tests of their own, run in their
+base images:
 
 ```bash
 docker run --rm -v "$PWD:/src:ro" -w /src node:24-trixie-slim node --test 'runtimes/js/test/*.test.mjs'
 docker run --rm -v "$PWD:/src:ro" -w /src -e PYTHONPATH=/src/runtimes/python313/runtime \
   python:3.13-slim-trixie python -m unittest discover -s runtimes/python313/tests
+docker run --rm -v "$PWD:/src:ro" -w /src php:8.5-cli-trixie php runtimes/php85/tests/run.php
 ```
 
 ## Releasing
