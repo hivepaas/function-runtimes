@@ -102,7 +102,9 @@ deps) deps ;;
 build) build ;;
 serve | invoke | call | health)
 	if [ ! -x "$binary" ]; then
-		[ "$command" != health ] && [ "$command" != call ] || fail "the function is not built"
+		if [ "$command" = health ] || [ "$command" = call ]; then
+			fail "the function is not built"
+		fi
 		build >&2
 	fi
 	exec "$binary" "$@"
